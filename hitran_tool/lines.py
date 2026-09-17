@@ -12,15 +12,15 @@ import numpy as np
 from .constants import T_REF
 from .species import molecule_id
 
-DATA_DIR = Path(__file__).resolve().parent.parent / "data" # search for the path to the data directory relative to this file
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _DB_STARTED = False
 
 
 def _ensure_db() -> None:
     global _DB_STARTED
-    if not _DB_STARTED: 
-        DATA_DIR.mkdir(exist_ok=True) # create the data directory if it doesn't exist
-        hapi.db_begin(str(DATA_DIR)) # start the HAPI database in the data directory
+    if not _DB_STARTED:
+        DATA_DIR.mkdir(exist_ok=True)
+        hapi.db_begin(str(DATA_DIR))
         _DB_STARTED = True
 
 
@@ -39,8 +39,8 @@ def ensure_lines(molecule: str, sigma_min: float, sigma_max: float, iso_id: int 
     them made ensure_lines re-fetch on every single call.
     """
     _ensure_db()
-    table = molecule  # the name of the molecule ex : "H2O" or "CO2"
-    m_id = molecule_id(molecule)  # we get the molecule id from the molecule name
+    table = molecule
+    m_id = molecule_id(molecule)
 
     range_file = _range_file(table)
     fetched_lo, fetched_hi = (None, None)

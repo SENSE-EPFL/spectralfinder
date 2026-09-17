@@ -1,7 +1,7 @@
 [project]
 name = "projet-semestre"
 version = "0.1.0"
-description = "Add your description here"
+description = "HITRAN-based spectral-window selector for simultaneous multi-gas detection"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

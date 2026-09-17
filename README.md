@@ -106,3 +106,19 @@ current `score = weakest_target_peak` is a simple placeholder.
   detection-sensitivity model is formalized.
 - No interferer/background modelling at all right now -- a real absorbing
   species that isn't in `targets` is simply invisible to the search.
+
+## Status
+
+Not yet validated against a published/known-good window -- that's the
+project's own stated validation step (e.g. 13CO2/12CO2 ratio, or the
+CH4/CO2/N2O case this default example targets) and needs reference data
+that hasn't been provided yet.
+
+Running the default example (near-ambient CH4/N2O/CO2, `L_cm` = the 34 m
+Herriott cell from Bereiter et al. 2020) currently finds candidate windows,
+but none reach an optical depth (`tau`) inside the acceptable range over
+2000-9000 cm^-1 -- the signals come out roughly 150-200x too weak at that
+path length. That's a real result, not a bug: either a much longer
+effective path length (cavity-based, km-scale) is needed, or a shared
+window for these three gases at these concentrations isn't achievable at
+all in this range. Pending real `L_cm`/concentration values to know which.

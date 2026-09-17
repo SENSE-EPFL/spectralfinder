@@ -19,16 +19,12 @@ from .constants import P_REF, T_REF
 
 _AMU_TO_G = 1.66053873e-24  # 1 amu in grams (CGS, consistent with hapi.cBolts/cc)
 
-# First here, we calculte the Doppler FWHM, which is pressure-independent.
 def doppler_fwhm(nu0: float, molec_id: int, iso_id: int, T: float) -> float:
     """Gaussian Doppler FWHM (cm^-1) at temperature T (K). Pressure-independent."""
     m_grams = molecularMass(molec_id, iso_id) * _AMU_TO_G
     return nu0 * sqrt(8 * log(2) * cBolts * T / (m_grams * cc**2))
 
 
-# Collisional (pressure) broadening
-# depends on the air/self fraction, the temperature, and the HITRAN .par file's
-# gamma_air, gamma_self, n_air values.
 def lorentz_fwhm(gamma_air: float, gamma_self: float, n_air: float,
                   T: float, P: float, self_fraction: float) -> float:
     """Collisional (pressure) FWHM (cm^-1).

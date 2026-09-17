@@ -1,4 +1,4 @@
-"""Absorption coefficient (Beer-Lambert alpha, cm^-1) and path-length helpers.
+"""Absorption coefficient (Beer-Lambert alpha, cm^-1) and optical-depth helper.
 
 alpha(sigma) = N * S(sigma)   [alpha = N * S * lineshape, integrated over the
 Voigt line shapes of every line in range], with N the absorber's own number
@@ -55,7 +55,3 @@ def optical_depth(alpha_peak: float, L: float) -> float:
     KNOWN, fixed path length L (cm) -- the calibration-instrument case:
     L is an input (your actual cell/cavity length), not something to solve for."""
     return alpha_peak * L
-
-
-def transmittance(alpha: np.ndarray, L: float) -> np.ndarray:
-    return np.exp(-alpha * L)
