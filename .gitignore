@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+
+# downloaded HITRAN line-list cache -- large, regenerated on demand via ensure_lines()
+data/*.data
+data/*.header
+data/*.fetched_range.json
+
+# generated outputs
+*.png
+*.log
+window_details/
+
+.DS_Store
