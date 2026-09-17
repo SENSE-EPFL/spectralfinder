@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 
@@ -60,6 +61,36 @@ def ensure_lines(molecule: str, sigma_min: float, sigma_max: float, iso_id: int 
         range_file.write_text(json.dumps([new_lo, new_hi]))
 
     return table
+
+
+_SLICE_MARGIN = 5.0  # cm^-1, generous vs. typical line FWHM (~1e-3 to a few 1e-1 cm^-1 in this project)
+
+
+def sliced_table(table: str, sigma_min: float, sigma_max: float, margin: float = _SLICE_MARGIN) -> str:
+    """Return the name of a table containing only the rows of `table` within
+    [sigma_min - margin, sigma_max + margin], built via a vectorized numpy
+    mask (no fetch, no re-parsing -- `table` must already be loaded).
+
+    Why this exists: as a table's cached coverage grows (e.g. a molecule
+    first queried over a wide range, then reused for a narrow one), HAPI's
+    own absorptionCoefficient_* iterates every row of the SourceTable in a
+    pure-Python loop regardless of the requested WavenumberRange -- a table
+    grown to cover 2000-9000 cm^-1 makes even a 100 cm^-1 query pay for all
+    ~200k rows. Slicing first with numpy (this function) avoids that: it's
+    a single vectorized mask, orders of magnitude cheaper than HAPI's
+    per-row loop, and the destination table it produces is what should be
+    passed to absorptionCoefficient_* instead of the raw `table`.
+    """
+    dest = f"_{table}_slice"
+    src = hapi.LOCAL_TABLE_CACHE[table]
+    nu = np.asarray(src["data"]["nu"])
+    mask = (nu >= sigma_min - margin) & (nu <= sigma_max + margin)
+    new_data = {k: np.asarray(v)[mask] for k, v in src["data"].items()}
+    new_header = copy.deepcopy(src["header"])
+    new_header["table_name"] = dest
+    new_header["number_of_rows"] = int(mask.sum())
+    hapi.LOCAL_TABLE_CACHE[dest] = {"header": new_header, "data": new_data, "filehandler": None}
+    return dest
 
 
 def line_arrays(table: str, sigma_min: float, sigma_max: float, T: float) -> dict:

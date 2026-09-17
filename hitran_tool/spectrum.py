@@ -21,11 +21,20 @@ import io
 import numpy as np
 from hapi import absorptionCoefficient_Voigt
 
+from .lines import sliced_table
+
 
 def absorption_coefficient(table: str, molec_id: int, iso_id: int, mole_fraction: float,
                             sigma_min: float, sigma_max: float, T: float, P: float,
                             step: float, s_cutoff: float):
-    """Return (nu_grid, alpha[cm^-1]) for one species over [sigma_min, sigma_max]."""
+    """Return (nu_grid, alpha[cm^-1]) for one species over [sigma_min, sigma_max].
+
+    `table` is sliced to [sigma_min, sigma_max] (+ margin) first -- see
+    lines.sliced_table for why: without it, a table whose cache has grown to
+    cover a much wider range than what's asked here pays for every one of
+    its rows on every call, not just the ones in range.
+    """
+    table = sliced_table(table, sigma_min, sigma_max)
     with contextlib.redirect_stdout(io.StringIO()):  # HAPI prints Diluent + timing on every call
         nu, xsect_times_ntotal = absorptionCoefficient_Voigt(
             Components=[(molec_id, iso_id)],

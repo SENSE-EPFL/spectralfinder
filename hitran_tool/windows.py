@@ -340,7 +340,12 @@ def find_combined_windows(targets: list, config: SearchConfig, background: dict 
     detection" case from the project brief). See find_windows_multi's
     docstring for how this differs from the one-window-per-gas case.
 
-    Algorithm, per candidate window (centered on any target's strong line):
+    Algorithm:
+      0. Candidate centers = local maxima of min(alpha_1, alpha_2, ..., alpha_N)
+         across all targets' spectra (the "weakest signal, as strong as it can
+         be" envelope) -- not each target's own line positions, which would
+         bias the search toward one species and could miss the true best
+         joint location sitting between individual line centers.
       1. Reject the window unless EVERY target has a peak > 0 inside it.
       2. For every PAIR of targets, check their strongest in-window lines are
          >= n_separation * max(FWHM) apart (same rule as find_windows, but
@@ -387,9 +392,20 @@ def find_combined_windows(targets: list, config: SearchConfig, background: dict 
         bg_spectra[name] = a
         bg_total += a
 
-    all_centers = np.unique(np.concatenate(
-        [d["lines"]["nu"][d["strong"]] for d in species.values()]
-    ))
+    # Candidate centers = local maxima of the MIN-envelope across all target
+    # spectra, not each species' own line positions. Anchoring candidates on
+    # one species' lines (as an earlier version of this function did) biases
+    # the search: the true best "all three at once" location can sit BETWEEN
+    # individual line centers, and a one-species anchor never probes that.
+    # The min-envelope directly answers "where is the weakest of the three
+    # signals as strong as it can possibly be" -- exactly the score this
+    # function ranks by -- and is a single vectorized pass over the shared
+    # grid rather than a loop over every strong line of every species.
+    envelope = np.minimum.reduce([d["alpha"] for d in species.values()])
+    is_local_max = np.zeros(envelope.shape, dtype=bool)
+    is_local_max[1:-1] = (envelope[1:-1] > envelope[:-2]) & (envelope[1:-1] >= envelope[2:]) & (envelope[1:-1] > 0)
+    peak_idx = np.nonzero(is_local_max)[0]
+    all_centers = nu_grid[peak_idx[np.argsort(envelope[peak_idx])[::-1]]]
 
     if config.delta_sigma is not None:
         delta_sigma = config.delta_sigma

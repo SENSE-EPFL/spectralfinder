@@ -10,25 +10,34 @@ HITRAN data via [HAPI](https://hitran.org/hapi/).
 uv sync
 ```
 
-## Run the demo
+## Run
 
 ```
-uv run example_ch4_detection.py
+uv run run.py
 ```
 
-Ranks windows for detecting 10 ppm CH4 in humid air (H2O, CO2 as
-interferers) over 2990-3170 cm^-1, prints a ranked table, and saves
-`example_ch4_detection.png`. HITRAN line lists are fetched from
-hitran.org on first use and cached under `data/`.
+Edit the parameters at the top of `run.py` (target species/concentration,
+interferers, search range) to change what it searches. Default: ranks
+windows for detecting 10 ppm CH4 in humid air (H2O, CO2 as interferers)
+over 2990-3170 cm^-1, prints a ranked table, and saves `run_output.png`.
+HITRAN line lists are fetched from hitran.org on first use and cached
+under `data/`.
+
+For simultaneous multi-gas searches, use `find_windows_multi()` (one
+instrument setting per gas) or `find_combined_windows()` (one setting
+that sees all gases at once) from `hitran_tool` directly -- see their
+docstrings in `hitran_tool/windows.py`.
 
 ## Structure
 
 - `hitran_tool/species.py` -- molecule name <-> HITRAN id, ppm/percent -> mole-fraction helpers.
-- `hitran_tool/lines.py` -- HITRAN line-list fetch + local cache (via HAPI).
+- `hitran_tool/lines.py` -- HITRAN line-list fetch + local cache (via HAPI), and `sliced_table()`
+  (keeps per-query computation cost tied to the requested range, not to how wide the cache has grown).
 - `hitran_tool/broadening.py` -- Doppler / pressure (Lorentz) / Voigt FWHM.
 - `hitran_tool/spectrum.py` -- absorption coefficient (Beer-Lambert alpha) and path-length helpers.
-- `hitran_tool/windows.py` -- candidate window search, metrics, ranking (`find_windows`).
-- `hitran_tool/report.py` -- text table + quick-look plot.
+- `hitran_tool/windows.py` -- candidate window search, metrics, ranking
+  (`find_windows`, `find_windows_multi`, `find_combined_windows`).
+- `hitran_tool/report.py` -- text tables + plots (overview and per-window detail).
 
 ## Inputs (`TargetSpecies` + `SearchConfig`)
 
