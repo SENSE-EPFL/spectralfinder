@@ -50,11 +50,11 @@ def absorption_coefficient(table: str, molec_id: int, iso_id: int, mole_fraction
     return np.asarray(nu), alpha
 
 
-def path_length_for_tau(alpha_peak: float, tau_target: float) -> float:
-    """Path length L (cm) such that alpha_peak * L = tau_target (Beer-Lambert)."""
-    if alpha_peak <= 0:
-        return float("inf")
-    return tau_target / alpha_peak
+def optical_depth(alpha_peak: float, L: float) -> float:
+    """Optical depth tau = -ln(I/I0) = alpha_peak * L (Beer-Lambert), for a
+    KNOWN, fixed path length L (cm) -- the calibration-instrument case:
+    L is an input (your actual cell/cavity length), not something to solve for."""
+    return alpha_peak * L
 
 
 def transmittance(alpha: np.ndarray, L: float) -> np.ndarray:

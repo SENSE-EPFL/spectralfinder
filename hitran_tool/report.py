@@ -1,46 +1,15 @@
-"""Text report and quick-look plot for a SearchResult."""
+"""Text report and quick-look plots for a CombinedSearchResult."""
 from __future__ import annotations
 
-from .windows import CombinedWindowResult, SearchResult
+from .windows import CombinedSearchResult
 
 
-def print_report(result: SearchResult, target_name: str) -> None:
-    if not result.windows:
-        print(f"No candidate window found for {target_name} with the current settings.")
-        return
-
-    print(f"Top {len(result.windows)} candidate window(s) for {target_name}\n")
-    header = (
-        f"{'#':>2} {'center':>10} {'window':>17} {'peak a':>10} {'interf.':>9} "
-        f"{'sep. ok':>8} {'L @ tau':>10} {'dT%/10K':>8} {'dP%/0.1atm':>10}  dominant interferer"
-    )
-    print(header)
-    print("-" * len(header))
-    for i, w in enumerate(result.windows, 1):
-        L_str = f"{w.suggested_path_length_cm:.2e}cm" if w.suggested_path_length_cm != float("inf") else "inf"
-        print(
-            f"{i:>2} {w.center:>10.3f} [{w.lo:>7.3f},{w.hi:>7.3f}] {w.target_peak_alpha:>10.3e} "
-            f"{w.interference_index:>9.3f} {str(w.separation_ok):>8} {L_str:>10} "
-            f"{w.sensitivity_T_percent_per_10K:>8.2f} {w.sensitivity_P_percent_per_0p1atm:>10.2f}  "
-            f"{w.dominant_interferer or '-'}"
-        )
-    print(
-        "\nunits: center/window in cm^-1, peak alpha in cm^-1, interf. = interferer/target peak alpha ratio,"
-        "\n       L @ tau = path length (cm) giving optical depth tau_target, dT/dP = %% change in peak alpha."
-    )
-
-
-def print_report_multi(results: dict) -> None:
-    """results: {target_name: SearchResult}, as returned by find_windows_multi()."""
-    for target_name, result in results.items():
-        print_report(result, target_name)
-        print()
-
-
-def print_combined_report(windows: list, names: list | None = None) -> None:
-    """windows: list of CombinedWindowResult, as returned by find_combined_windows()."""
+def print_combined_report(result: CombinedSearchResult, names: list | None = None) -> None:
+    """result: as returned by find_combined_windows()."""
+    windows = result.windows
     if not windows:
-        print("No window found where all targets are simultaneously detectable.")
+        print("No window found where all targets have a mutually distinguishable line "
+              "(separation requirement never satisfied).")
         return
 
     names = names or list(windows[0].peak_alpha)
@@ -48,104 +17,87 @@ def print_combined_report(windows: list, names: list | None = None) -> None:
     header = (
         f"{'#':>2} {'center':>10} {'window':>17} "
         + " ".join(f"{n + ' peak':>14}" for n in names)
-        + f" {'worst pair':>10} {'sep ok':>7} {'L (cm)':>10}  bg. dominant"
+        + " " + " ".join(f"{n + ' tau':>10}" for n in names)
+        + f" {'worst pair':>10}"
     )
     print(header)
     print("-" * len(header))
     for i, c in enumerate(windows, 1):
         peaks = " ".join(f"{c.peak_alpha[n]:>14.3e}" for n in names)
+        # '*' flags a species whose tau falls outside [tau_min, tau_max] at
+        # this L_cm -- reported, not filtered, so a run can still return its
+        # best candidates even when none of them reach the acceptable range.
+        taus = " ".join(f"{c.tau[n]:>9.3f}{'' if c.tau_ok[n] else '*'}" for n in names)
         pair_str = f"{c.worst_pair[0][:2]}/{c.worst_pair[1][:2]}" if c.worst_pair else "-"
-        L_str = f"{c.suggested_path_length_cm_combined:.2e}" if c.suggested_path_length_cm_combined != float("inf") else "inf"
         print(
-            f"{i:>2} {c.center:>10.3f} [{c.lo:>7.3f},{c.hi:>7.3f}] {peaks} "
-            f"{pair_str:>10} {str(c.separation_ok):>7} {L_str:>10}  {c.dominant_background or '-'}"
+            f"{i:>2} {c.center:>10.3f} [{c.lo:>7.3f},{c.hi:>7.3f}] {peaks} {taus} "
+            f"{pair_str:>10}"
         )
     print(
-        "\nunits: center/window in cm^-1, peaks in cm^-1, worst pair = tightest species pair in the window,"
-        "\n       L (cm) = path length covering the weakest species at tau_target (max over species)."
+        "\nunits: center/window in cm^-1, peaks in cm^-1, tau = -ln(I/I0) = peak * L_cm (dimensionless),"
+        "\n       '*' after tau = outside [tau_min, tau_max] at this L_cm (informational, not filtered)."
+        "\n       worst pair = tightest species pair in the window (every listed window already passed the"
+        "\n       separation check -- that part IS a hard filter, so there's no pass/fail column for it)."
     )
 
 
-def plot_windows(result: SearchResult, target_name: str, top_n: int = 5):
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    ax.plot(result.nu_grid, result.alpha_target, label=target_name, lw=1)
-    if result.interferer_spectra:
-        ax.plot(result.nu_grid, result.alpha_interference_total, label="interferers (sum)", lw=1, alpha=0.7)
-
-    for i, w in enumerate(result.windows[:top_n], 1):
-        ax.axvspan(w.lo, w.hi, color="tab:green", alpha=0.15)
-        ax.text(w.center, ax.get_ylim()[1], str(i), ha="center", va="bottom")
-
-    ax.set_yscale("log")
-    ax.set_xlabel("Wavenumber (cm$^{-1}$)")
-    ax.set_ylabel("Absorption coefficient (cm$^{-1}$)")
-    ax.set_title(f"Candidate detection windows for {target_name}")
-    ax.legend()
-    fig.tight_layout()
-    return fig
-
-
-def plot_window_detail(result: SearchResult, target_name: str, index: int, margin_factor: float = 1.0):
-    """Zoomed-in, one-window report: target vs. EACH interferer plotted
-    separately (not summed, unlike plot_windows), with the window bounds,
-    the nearest interfering line, and the window's metrics annotated.
+def plot_combined_window_detail(result: CombinedSearchResult, index: int, margin_factor: float = 1.0):
+    """Zoomed-in report for one CombinedWindowResult: every target species
+    plotted separately, with the tightest pair and per-species metrics
+    annotated.
 
     index: 0-based position into result.windows (already sorted best-first).
-    margin_factor: how much context to show around [lo, hi], in units of the
-    window width (1.0 = show one extra window-width on each side).
     """
     import matplotlib.pyplot as plt
 
-    w = result.windows[index]
-    width = w.hi - w.lo
+    c = result.windows[index]
+    width = c.hi - c.lo
     margin = margin_factor * width
-    view_lo, view_hi = w.lo - margin, w.hi + margin
+    view_lo, view_hi = c.lo - margin, c.hi + margin
     mask = (result.nu_grid >= view_lo) & (result.nu_grid <= view_hi)
 
     fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(result.nu_grid[mask], result.alpha_target[mask], label=target_name, lw=1.5, color="tab:blue")
-    for name, alpha_i in result.interferer_spectra.items():
-        ax.plot(result.nu_grid[mask], alpha_i[mask], label=name, lw=1, ls="--", alpha=0.8)
+    for name, alpha_i in result.species_spectra.items():
+        ax.plot(result.nu_grid[mask], alpha_i[mask], label=name, lw=1.5)
 
-    ax.axvspan(w.lo, w.hi, color="tab:green", alpha=0.12, label="selected window")
-    if w.nearest_interferer_line is not None and view_lo <= w.nearest_interferer_line <= view_hi:
-        ax.axvline(w.nearest_interferer_line, color="tab:red", ls=":", lw=1,
-                   label=f"nearest line ({w.dominant_interferer or '?'})")
+    ax.axvspan(c.lo, c.hi, color="tab:green", alpha=0.12, label="selected window")
+    for name, pos in c.line_position.items():
+        if view_lo <= pos <= view_hi:
+            ax.axvline(pos, color="0.6", ls=":", lw=0.8)
 
-    L_str = f"{w.suggested_path_length_cm:.2e} cm" if w.suggested_path_length_cm != float("inf") else "inf"
-    separation_str = f"{w.separation:.4f}" if w.separation is not None else "-"
+    names = list(c.peak_alpha)
+    peaks_str = ", ".join(f"{n}={c.peak_alpha[n]:.2e}" for n in names)
+    tau_str = ", ".join(f"{n}={c.tau[n]:.3f}{'' if c.tau_ok[n] else '*'}" for n in names)
+    pair_str = f"{c.worst_pair[0]}/{c.worst_pair[1]}: {c.worst_pair[2]:.4f} (req {c.worst_pair[3]:.4f})" if c.worst_pair else "-"
     info = (
-        f"peak alpha = {w.target_peak_alpha:.3e} cm$^{{-1}}$\n"
-        f"interference index = {w.interference_index:.3f}  (dominant: {w.dominant_interferer or '-'})\n"
-        f"separation = {separation_str} cm$^{{-1}}$ (required {w.required_separation:.4f}), ok={w.separation_ok}\n"
-        f"suggested path length @ tau = {L_str}\n"
-        f"sensitivity: {w.sensitivity_T_percent_per_10K:+.2f}%/10K, "
-        f"{w.sensitivity_P_percent_per_0p1atm:+.2f}%/0.1atm"
+        f"peaks (cm$^{{-1}}$): {peaks_str}\n"
+        f"tau (-ln(I/I0) at L_cm): {tau_str}\n"
+        f"tightest pair: {pair_str}"
     )
     ax.text(0.02, 0.98, info, transform=ax.transAxes, va="top", ha="left", fontsize=8,
             bbox=dict(boxstyle="round", facecolor="white", alpha=0.85))
 
+    ax.set_yscale("log")
     ax.set_xlabel("Wavenumber (cm$^{-1}$)")
     ax.set_ylabel("Absorption coefficient (cm$^{-1}$)")
-    ax.set_title(f"{target_name} -- window #{index + 1} @ {w.center:.3f} cm$^{{-1}}$")
+    ax.set_title(f"Combined window #{index + 1} @ {c.center:.3f} cm$^{{-1}}$ -- {' + '.join(names)}")
     ax.legend(loc="upper right", fontsize=8)
     fig.tight_layout()
     return fig
 
 
-def save_window_details(result: SearchResult, target_name: str, output_dir: str, **kwargs) -> list:
-    """Save one PNG per window (plot_window_detail) into output_dir. Returns the file paths."""
+def save_combined_window_details(result: CombinedSearchResult, output_dir: str, **kwargs) -> list:
+    """Save one PNG per window (plot_combined_window_detail) into output_dir."""
     import os
+
+    import matplotlib.pyplot as plt
 
     os.makedirs(output_dir, exist_ok=True)
     paths = []
     for i in range(len(result.windows)):
-        fig = plot_window_detail(result, target_name, i, **kwargs)
-        path = os.path.join(output_dir, f"{target_name}_window_{i + 1:02d}.png")
+        fig = plot_combined_window_detail(result, i, **kwargs)
+        path = os.path.join(output_dir, f"combined_window_{i + 1:02d}.png")
         fig.savefig(path, dpi=150)
-        import matplotlib.pyplot as plt
         plt.close(fig)
         paths.append(path)
     return paths

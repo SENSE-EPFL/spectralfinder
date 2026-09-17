@@ -1,8 +1,11 @@
 # HITRAN spectral-window selector -- first draft
 
-Ranks candidate spectral windows for detecting a target gas (given its
-concentration) against a set of interfering species, using line-by-line
-HITRAN data via [HAPI](https://hitran.org/hapi/).
+Finds the spectral window(s) where several target gases (given their
+concentrations) are all simultaneously detectable in ONE measurement --
+i.e. picks the best setting for a single-scan, single-instrument multi-gas
+sensor. This is the case the project targets: one measurement has to see
+every target gas at once, not a different setting per gas. Uses
+line-by-line HITRAN data via [HAPI](https://hitran.org/hapi/).
 
 ## Setup
 
@@ -16,38 +19,46 @@ uv sync
 uv run run.py
 ```
 
-Edit the parameters at the top of `run.py` (target species/concentration,
-interferers, search range) to change what it searches. Default: ranks
-windows for detecting 10 ppm CH4 in humid air (H2O, CO2 as interferers)
-over 2990-3170 cm^-1, prints a ranked table, and saves `run_output.png`.
-HITRAN line lists are fetched from hitran.org on first use and cached
-under `data/`.
+Edit the parameters at the top of `run.py` (target species/concentrations,
+search range, and `L_cm` -- your instrument's real, fixed path length) to
+change what it searches. Default: CH4 + N2O + CO2 combined over
+2000-9000 cm^-1 -- prints a ranked table and saves one zoomed plot per
+window under `window_details/`. HITRAN line lists are fetched from
+hitran.org on first use and cached under `data/`.
 
-For simultaneous multi-gas searches, use `find_windows_multi()` (one
-instrument setting per gas) or `find_combined_windows()` (one setting
-that sees all gases at once) from `hitran_tool` directly -- see their
-docstrings in `hitran_tool/windows.py`.
+One function: `find_combined_windows(targets, config)`. Only makes sense
+when the targets' concentrations are within a few orders of magnitude of
+each other -- mixing ppm-level trace gases with e.g. 30% H2O in one window
+doesn't work (H2O would be saturated long before the trace gases reach a
+useful optical depth; see `hitran_tool/windows.py` docstring). There's no
+separate "background interferer" concept -- if a species matters to the
+search, it goes in `targets`.
 
 ## Structure
 
 - `hitran_tool/species.py` -- molecule name <-> HITRAN id, ppm/percent -> mole-fraction helpers.
 - `hitran_tool/lines.py` -- HITRAN line-list fetch + local cache (via HAPI), and `sliced_table()`
   (keeps per-query computation cost tied to the requested range, not to how wide the cache has grown).
-- `hitran_tool/broadening.py` -- Doppler / pressure (Lorentz) / Voigt FWHM.
-- `hitran_tool/spectrum.py` -- absorption coefficient (Beer-Lambert alpha) and path-length helpers.
-- `hitran_tool/windows.py` -- candidate window search, metrics, ranking
-  (`find_windows`, `find_windows_multi`, `find_combined_windows`).
-- `hitran_tool/report.py` -- text tables + plots (overview and per-window detail).
+- `hitran_tool/broadening.py` -- Doppler / pressure (Lorentz) / Voigt FWHM (used only for the
+  peak-separation check between targets, not for the spectrum curve itself -- see `windows.py`'s docstring).
+- `hitran_tool/spectrum.py` -- absorption coefficient alpha(sigma) (exact HAPI Voigt profile) and
+  the Beer-Lambert optical-depth helper (`optical_depth = alpha_peak * L`).
+- `hitran_tool/windows.py` -- candidate window search, metrics, ranking (`find_combined_windows`).
+- `hitran_tool/report.py` -- text table + per-window zoomed plots.
 
 ## Inputs (`TargetSpecies` + `SearchConfig`)
 
-- Target molecule + concentration (mole fraction; use `ppm_to_fraction`/`percent_to_fraction`).
-- Interferers: `{name: mole_fraction}`, given explicitly by the caller -- no background/atmospheric composition is assumed or auto-populated (kept out on purpose to avoid adding a second, implicit concentration source).
+- Targets: list of `TargetSpecies(name, mole_fraction)` -- one per gas that must be simultaneously
+  detectable (use `ppm_to_fraction`/`percent_to_fraction` to convert). No separate interferer list --
+  every species considered has to be a target.
+- `L_cm`: the instrument's real, fixed path length (cm) -- an input, not something the tool solves
+  for (this is a calibration tool for an existing/known setup, not an instrument-design tool).
 - Search range `sigma_min`/`sigma_max` (cm^-1), temperature `T` (K), pressure `P` (atm).
 - `s_cutoff`: minimum HITRAN line intensity (cm^-1/(molecule*cm^-2)) at T, used to drop negligible lines (~1e-28 to 1e-25 is the typical range).
-- `delta_sigma`: window width (cm^-1); auto-picked from the local line width if left `None`.
-- `n_separation`: required gap to the nearest interferer line, in units of the larger of the two lines' Voigt FWHM.
-- `tau_target`/`tau_tolerance`: target optical depth `-ln(I/I0)` (default 0.10 +/- 30%), used to back out a suggested path length per window.
+- `delta_sigma`: window width (cm^-1); auto-picked tight around each candidate's real peak positions if left `None`.
+- `n_separation`: required gap between every PAIR of targets, in units of the larger of the two lines' Voigt FWHM -- a hard filter.
+- `tau_min`/`tau_max`: acceptable optical depth range `-ln(I/I0)` at `L_cm` (default 0-40%) -- flags `CombinedWindowResult.tau_ok`
+  per species, reported in the output but NOT filtered on (so a run always returns its best candidates, even when none reach this range).
 - `max_windows`: how many ranked windows to return.
 
 ## Key physics/unit points (see module docstrings for detail)
@@ -71,24 +82,27 @@ docstrings in `hitran_tool/windows.py`.
 
 ## What this first draft does and doesn't do
 
-Implemented: line loading/caching, full-range absorption spectra for target +
-interferers, peak-centered candidate windows, interference ratio, minimum
-line-separation check (hard filter by default), suggested path length from
-the target optical depth, and a cheap +/-10 K / +/-0.1 atm sensitivity
-finite-difference for the selected windows.
+Implemented: line loading/caching, full-range absorption spectra per
+target, envelope-based candidate windows (local maxima of the minimum
+across all target spectra), pairwise target-separation check (hard filter),
+tight per-candidate window sizing (built around the real peak positions
+found, not a worst-case formula), and optical depth `tau = alpha_peak * L_cm`
+at the instrument's real path length, flagged against an acceptable range
+but not filtered on.
 
 Deliberately deferred (per the project notes: "pas maintenant"):
 isotopologue-ratio scoring (the code already threads an `iso_id` through
-`TargetSpecies` so this is a natural extension), and a proper
-sensitivity/interference weighting for the ranking score -- the current
-`score = peak_alpha / (1 + interference_index)` is a simple placeholder.
+`TargetSpecies` so this is a natural extension), any notion of background
+interferers not being searched for (kept out on purpose -- too much
+complexity for now, see project discussion), T/P sensitivity for combined
+windows (was implemented for an earlier single-gas search, not ported
+here), and a proper sensitivity weighting for the ranking score -- the
+current `score = weakest_target_peak` is a simple placeholder.
 
 ## Known limitations to revisit
 
 - Ranking score and the n_air exponent applied to self-broadening are
   simplifications, flagged in the code, that should be reviewed once the
   detection-sensitivity model is formalized.
-- Runtime: interferer + target spectra are computed once per species/window
-  set, but the current line-separation search still re-scans interferer line
-  lists per candidate; fine for a first draft, worth vectorizing if
-  `max_windows`/search ranges grow a lot.
+- No interferer/background modelling at all right now -- a real absorbing
+  species that isn't in `targets` is simply invisible to the search.
