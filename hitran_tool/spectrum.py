@@ -20,8 +20,17 @@ import io
 
 import numpy as np
 from hapi import absorptionCoefficient_Voigt
+from hapi import volumeConcentration as _volume_concentration
 
 from .lines import sliced_table
+
+
+def number_density(P: float, T: float) -> float:
+    """Total number density n_total(P,T) (molec/cm^3) from the ideal gas law,
+    via HAPI's own volumeConcentration -- reused directly rather than
+    reimplemented, since absorption_coefficient() below relies on this exact
+    same quantity internally (through HITRAN_units=False)."""
+    return _volume_concentration(P, T)
 
 
 def absorption_coefficient(table: str, molec_id: int, iso_id: int, mole_fraction: float,

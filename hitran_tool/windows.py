@@ -1,9 +1,27 @@
-"""Candidate spectral-window search and ranking.
+"""Candidate spectral-window search and ranking, in TWO STAGES (per the
+project supervisor's proposed workflow):
 
-One function, find_combined_windows(): finds window(s) where EVERY target
-gas has a detectable, mutually distinguishable line -- for a single
-instrument setting/measurement that sees several gases at once (the
-"simultaneous CH4/CO2/N2O detection" case from the project brief).
+  STAGE 1 -- fast/coarse candidate search, over the FULL search range.
+    Uses only line POSITIONS and a cheap intensity PROXY (line strength S(T)
+    times number density, no line shape at all) -- never the expensive full
+    Voigt-profile spectrum. This is what makes it fast enough to scan a wide
+    range (thousands of cm^-1): no HAPI absorptionCoefficient_* call happens
+    in this stage.
+
+  STAGE 2 -- refine, only on the small number of candidates stage 1 keeps.
+    NOW compute the real absorption spectrum (Doppler + collisional
+    broadening, exact HAPI Voigt profile) but only over each candidate's
+    narrow window (delta_sigma, e.g. 0.3-0.4 cm^-1 -- a DFB laser's current-
+    scan range), which is cheap precisely because the range is tiny. Convert
+    to a real peak alpha (cm^-1), then to transmission = exp(-alpha * L_cm)
+    at the instrument's real, fixed path length, and flag whether that falls
+    in the acceptable range.
+
+Doing it the other way around -- full-width, full-physics spectra over the
+whole search range before even looking for candidates -- is what made the
+single-stage version of this function slow (tens of seconds to minutes):
+HAPI's per-line Python loop pays for every line in range regardless of how
+much of that range is ever a plausible answer.
 
 Only the target gases themselves are modelled: every PAIR of target species
 must have their strongest in-window line >= n_separation * max(FWHM) apart,
@@ -16,12 +34,13 @@ See find_combined_windows()'s own docstring for the full algorithm.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from math import exp
 
 import numpy as np
 
 from .broadening import doppler_fwhm, lorentz_fwhm, voigt_fwhm
 from .lines import ensure_lines, line_arrays
-from .spectrum import absorption_coefficient, optical_depth
+from .spectrum import absorption_coefficient, number_density, optical_depth
 from .species import molecule_id
 
 
@@ -37,15 +56,18 @@ class SearchConfig:
     sigma_min: float  # cm^-1
     sigma_max: float  # cm^-1
     L_cm: float  # KNOWN, fixed path length of the actual instrument (cm) -- not solved for
+    delta_sigma: float = 0.35  # window width, cm^-1 -- a real hardware constraint (e.g. a DFB
+    # laser's current-tuning range is typically ~0.3-0.4 cm^-1), NOT auto-derived
     T: float = 296.0  # K
     P: float = 1.0  # atm
     s_cutoff: float = 1e-26  # cm^-1 / (molecule * cm^-2), HITRAN 'sw' units, at T
-    delta_sigma: float | None = None  # window width, cm^-1; auto if None
-    n_separation: float = 5.0  # required gap between targets = n_separation * max(FWHM); closer windows are rejected
-    tau_min: float = 0.0  # acceptable optical depth range -ln(I/I0) at L_cm (0-40% by default): below
-    tau_max: float = 0.40  # tau_min = too weak/noisy, above tau_max = saturated. Flags CombinedWindowResult.tau_ok, does not filter.
+    n_separation: float = 3.0  # required gap between targets = n_separation * max(FWHM); closer windows are rejected
+    transmission_min: float = 0.05  # acceptable I/I0 = exp(-alpha*L_cm) range: below transmission_min
+    transmission_max: float = 0.20  # = too strong/saturated, above transmission_max = too weak/noisy.
+    # Flags CombinedWindowResult.transmission_ok, does not filter.
     max_windows: int = 10
-    wavenumber_step: float = 0.01  # cm^-1, spectral grid resolution
+    max_stage1_candidates: int = 200  # cap on how many stage-1 candidates get the expensive stage-2 treatment
+    wavenumber_step: float = 0.01  # cm^-1, spectral grid resolution used in stage 2
 
 
 @dataclass
@@ -56,24 +78,28 @@ class CombinedWindowResult:
     center: float
     lo: float
     hi: float
-    peak_alpha: dict  # {species_name: peak alpha in window, cm^-1}
+    peak_alpha: dict  # {species_name: peak alpha in window, cm^-1} -- real Voigt profile (stage 2)
     line_position: dict  # {species_name: position of its strongest in-window line, cm^-1}
     fwhm: dict  # {species_name: Voigt FWHM of that line, cm^-1}
     worst_pair: tuple | None  # (name_a, name_b, separation, required) -- the tightest pair; None if
     # only one target was searched (no pair to check). Diagnostic only: every window here already
     # passed the separation check, so this isn't a pass/fail flag.
     tau: dict  # {species_name: optical depth -ln(I/I0) = peak_alpha * L_cm, at the instrument's real L}
-    tau_ok: dict  # {species_name: True if tau_min <= tau <= tau_max}
+    transmission: dict  # {species_name: I/I0 = exp(-tau)}
+    transmission_ok: dict  # {species_name: True if transmission_min <= transmission <= transmission_max}
     score: float = 0.0
 
 
 @dataclass
 class CombinedSearchResult:
-    """Return value of find_combined_windows(): the ranked windows plus the
-    underlying per-species spectra (needed for per-window plotting)."""
+    """Return value of find_combined_windows(): the ranked windows plus, for
+    plotting, each window's OWN narrow stage-2 spectra -- there's no single
+    shared spectrum any more (unlike the old single-stage version): every
+    window has its own tiny [lo, hi] range, computed independently.
+    `window_spectra[i]` is a {species_name: (nu_grid, alpha)} dict matching
+    `windows[i]`."""
     windows: list
-    nu_grid: np.ndarray
-    species_spectra: dict  # {target species_name: alpha array, cm^-1}
+    window_spectra: list
 
 
 def _line_fwhm(m_id: int, iso_id: int, nu0: float, gamma_air: float, gamma_self: float,
@@ -90,114 +116,85 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
     detection" case from the project brief: one measurement, every target
     gas visible in it).
 
-    Algorithm:
-      0. Candidate centers = local maxima of min(alpha_1, alpha_2, ..., alpha_N)
-         across all targets' spectra (the "weakest signal, as strong as it can
-         be" envelope) -- not each target's own line positions, which would
-         bias the search toward one species and could miss the true best
-         joint location sitting between individual line centers.
-      1. For each candidate, find EACH target's strongest line within a
-         generous search radius of that center (this radius is only used to
-         identify which line is responsible -- it is NOT the final window).
-      2. For every PAIR of targets, check those line positions are
-         >= n_separation * max(FWHM) apart.
-      3. Size the ACTUAL window AFTER finding the real peak positions: tight
-         around [leftmost peak, rightmost peak] plus a small margin, unless
-         config.delta_sigma is set explicitly (then that fixed width is used
-         instead). This is what keeps windows from being uniformly oversized
-         for a worst-case spread that most candidates don't actually have --
-         then each species' peak is re-measured inside this tight window.
-      4. Convert each species' peak to an optical depth tau = peak * L_cm at
-         the instrument's real, fixed path length (config.L_cm), and flag
-         tau_ok per species (within [tau_min, tau_max], 0-40% by default).
-         This is reported, not filtered on -- see CombinedWindowResult.tau_ok.
-      5. score = weakest target peak. "Weakest peak" rewards windows where
-         all targets are comparably strong, not just one dominant one.
+    STAGE 1 (cheap, whole range):
+      0. Load each target's lines (positions, T-corrected intensity S(T),
+         broadening parameters) -- no spectrum computed yet.
+      1. proxy_intensity per line = S(T) * n_total(P,T) * mole_fraction.
+         This has units of cm^-2, NOT alpha's cm^-1 -- it deliberately skips
+         the line shape (no width, no Voigt) so it's cheap to compute for
+         every line. It's only used to RANK candidates against each other,
+         consistently across species, never reported as a physical alpha.
+      2. Candidate centers = every target's own strong-line positions.
+      3. For each candidate: does EVERY species have a strong line within
+         delta_sigma of it? If not, reject. Otherwise take each species'
+         strongest such line (by proxy_intensity) as its representative.
+      4. Pairwise separation check (>= n_separation * max(FWHM), FWHM from
+         the cheap analytic formula in broadening.py -- still no full
+         spectrum). Reject if any pair fails.
+      5. stage1_score = weakest proxy_intensity across species. Sort, dedup
+         (reject centers < delta_sigma from an already-kept one), keep up to
+         max_stage1_candidates.
+
+    STAGE 2 (expensive but now on a handful of narrow windows):
+      6. For each surviving candidate, compute the REAL absorption spectrum
+         (exact HAPI Voigt profile, real Doppler+collisional widths) for
+         each species, but ONLY over that candidate's own
+         [center - delta_sigma/2, center + delta_sigma/2] -- cheap because
+         the range is tiny, not because the physics is approximated.
+      7. tau = peak_alpha * L_cm (instrument's real path length);
+         transmission = exp(-tau); flag transmission_ok against
+         [transmission_min, transmission_max]. Reported, not filtered on --
+         see CombinedWindowResult.transmission_ok.
+      8. score = weakest REAL target peak (replaces the stage-1 proxy for
+         final ranking). Filter out very weak survivors, sort, dedup, keep
+         top max_windows.
 
     Returns a CombinedSearchResult: .windows is the ranked list of
     CombinedWindowResult (best first, up to max_windows), plus the
-    underlying spectra for plotting.
+    per-window spectra for plotting.
     """
+    delta_sigma = config.delta_sigma
+    n_total = number_density(config.P, config.T)
+
+    # ============================== STAGE 1 ==============================
     species = {}
     for t in targets:
         table = ensure_lines(t.name, config.sigma_min, config.sigma_max, t.iso_id)
         lines_ = line_arrays(table, config.sigma_min, config.sigma_max, config.T)
         strong = lines_["sw"] >= config.s_cutoff
         m_id = molecule_id(t.name)
-        nu_grid, alpha = absorption_coefficient(
-            table, m_id, t.iso_id, t.mole_fraction,
-            config.sigma_min, config.sigma_max, config.T, config.P,
-            config.wavenumber_step, config.s_cutoff,
-        )
-        species[t.name] = dict(target=t, m_id=m_id, lines=lines_, strong=strong,
-                                nu_grid=nu_grid, alpha=alpha)
+        # proxy_intensity: S(T) * N_species, no line shape -- see module docstring.
+        proxy = lines_["sw"] * (n_total * t.mole_fraction)
+        species[t.name] = dict(target=t, m_id=m_id, lines=lines_, strong=strong, proxy=proxy)
 
-    nu_grid = next(iter(species.values()))["nu_grid"]
+    all_centers = np.sort(np.concatenate(
+        [d["lines"]["nu"][d["strong"]] for d in species.values() if np.any(d["strong"])]
+    ))
 
-    # Candidate centers = local maxima of the MIN-envelope across all target
-    # spectra, not each species' own line positions. Anchoring candidates on
-    # one species' lines (as an earlier version of this function did) biases
-    # the search: the true best "all three at once" location can sit BETWEEN
-    # individual line centers, and a one-species anchor never probes that.
-    # The min-envelope directly answers "where is the weakest of the three
-    # signals as strong as it can possibly be" -- exactly the score this
-    # function ranks by -- and is a single vectorized pass over the shared
-    # grid rather than a loop over every strong line of every species.
-    envelope = np.minimum.reduce([d["alpha"] for d in species.values()])
-    is_local_max = np.zeros(envelope.shape, dtype=bool)
-    is_local_max[1:-1] = (envelope[1:-1] > envelope[:-2]) & (envelope[1:-1] >= envelope[2:]) & (envelope[1:-1] > 0)
-    peak_idx = np.nonzero(is_local_max)[0]
-    all_centers = nu_grid[peak_idx[np.argsort(envelope[peak_idx])[::-1]]]
-
-    # Window margin: how much extra room to show past the outermost peak on
-    # each side, in units of that peak's own FWHM. Only used when
-    # config.delta_sigma is None (auto/tight sizing, see below).
-    window_margin_factor = 0.5
-
-    # A generous radius used ONLY to identify, per species, which line is
-    # responsible near a candidate -- deliberately wide (same order as the
-    # old single global window formula) so a real line never gets missed.
-    # This is NOT the reported/measured window size; that's built tight
-    # around the positions this search finds, further down.
-    sample_all = []
-    for d in species.values():
-        t = d["target"]
-        idx = np.nonzero(d["strong"])[0][:200]  # cap for speed on huge line lists
-        sample_all.extend(
-            _line_fwhm(d["m_id"], t.iso_id, d["lines"]["nu"][k], d["lines"]["gamma_air"][k],
-                       d["lines"]["gamma_self"][k], d["lines"]["n_air"][k], config.T, config.P, t.mole_fraction)
-            for k in idx
-        )
-    typical_fwhm = float(np.median(sample_all)) if sample_all else 0.1
-    search_radius = 0.75 * config.n_separation * len(targets) * typical_fwhm
-
-    candidates = []
+    stage1 = []
     for center in all_centers:
-        # For each species: the strongest line within `search_radius` of the
-        # candidate (same proxy as before for "which line is responsible"),
-        # but the WINDOW used for reporting and for measuring the actual
-        # peak is built tight around these real positions afterward (below)
-        # instead of reusing this generous search radius as the window --
-        # that reuse is what made every window uniformly oversized.
-        peak_positions, fwhm = {}, {}
-        ok = True
+        lo, hi = center - delta_sigma / 2, center + delta_sigma / 2
+
+        peak_positions, fwhm, proxy_val = {}, {}, {}
+        complete = True
         for name, d in species.items():
             idx_strong = np.nonzero(d["strong"])[0]
             nus = d["lines"]["nu"][idx_strong]
-            near = idx_strong[(nus >= center - search_radius) & (nus <= center + search_radius)]
-            if near.size == 0:
-                ok = False
+            in_win = (nus >= lo) & (nus <= hi)
+            if not np.any(in_win):
+                complete = False
                 break
-            sws = d["lines"]["sw"][near]
-            k = near[int(np.argmax(sws))]
+            candidates_here = idx_strong[in_win]
+            k = candidates_here[int(np.argmax(d["proxy"][candidates_here]))]
             nu0 = float(d["lines"]["nu"][k])
             peak_positions[name] = nu0
+            proxy_val[name] = float(d["proxy"][k])
             fwhm[name] = _line_fwhm(
                 d["m_id"], d["target"].iso_id, nu0, d["lines"]["gamma_air"][k],
                 d["lines"]["gamma_self"][k], d["lines"]["n_air"][k],
                 config.T, config.P, d["target"].mole_fraction,
             )
-        if not ok:
+        if not complete:
             continue
 
         names = list(peak_positions)
@@ -213,74 +210,74 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
                 margin = sep - required
                 if margin < worst_margin:
                     worst_margin, worst_pair = margin, (a, b, sep, required)
-
         if not separation_ok:
             continue
 
-        if config.delta_sigma is not None:
-            lo, hi = center - config.delta_sigma / 2, center + config.delta_sigma / 2
-        else:
-            leftmost = min(peak_positions, key=peak_positions.get)
-            rightmost = max(peak_positions, key=peak_positions.get)
-            lo = peak_positions[leftmost] - window_margin_factor * fwhm[leftmost]
-            hi = peak_positions[rightmost] + window_margin_factor * fwhm[rightmost]
+        stage1_score = min(proxy_val.values())
+        stage1.append((stage1_score, float(center), lo, hi, peak_positions, fwhm, worst_pair))
 
-        # Measure the actual peak within this (now tight) window -- built
-        # around real line positions with margin, so it reliably contains
-        # each species' true summit.
-        i_lo, i_hi = np.searchsorted(nu_grid, (lo, hi))
-        if i_hi <= i_lo:
+    stage1.sort(key=lambda c: c[0], reverse=True)
+
+    stage1_selected = []
+    for c in stage1:
+        center = c[1]
+        if any(abs(center - s[1]) < delta_sigma for s in stage1_selected):
             continue
+        stage1_selected.append(c)
+        if len(stage1_selected) >= config.max_stage1_candidates:
+            break
+
+    # ============================== STAGE 2 ==============================
+    candidates = []
+    for _, center, lo, hi, peak_positions, fwhm, worst_pair in stage1_selected:
         peak_alpha = {}
+        window_spectrum = {}
         ok = True
         for name, d in species.items():
-            peak_here = float(d["alpha"][i_lo:i_hi].max())
-            if peak_here <= 0:
+            table = ensure_lines(name, lo, hi, d["target"].iso_id)  # sub-range already covered from stage 1
+            nu_grid, alpha = absorption_coefficient(
+                table, d["m_id"], d["target"].iso_id, d["target"].mole_fraction,
+                lo, hi, config.T, config.P, config.wavenumber_step, config.s_cutoff,
+            )
+            if alpha.size == 0 or float(alpha.max()) <= 0:
                 ok = False
                 break
-            peak_alpha[name] = peak_here
+            peak_alpha[name] = float(alpha.max())
+            window_spectrum[name] = (nu_grid, alpha)
         if not ok:
             continue
 
         weakest_peak = min(peak_alpha.values())
 
-        # With a KNOWN, fixed L (the real instrument, not something still
-        # being chosen), tau = peak * L tells you whether THIS L gives a
-        # usable signal here: too low means buried in noise, too high means
-        # saturated. Reported per species, NOT filtered on: unlike
-        # separation (a hard yes/no -- can these gases even be told apart),
-        # tau is a matter of degree, and a hard reject here gives zero
-        # information back when nothing clears the target band -- no sense
-        # of "how close". Better to always return the strongest candidates
-        # and let tau_ok show how far off they are.
         tau = {name: optical_depth(p, config.L_cm) for name, p in peak_alpha.items()}
-        tau_ok = {name: config.tau_min <= t <= config.tau_max for name, t in tau.items()}
+        transmission = {name: exp(-t) for name, t in tau.items()}
+        transmission_ok = {
+            name: config.transmission_min <= tr <= config.transmission_max
+            for name, tr in transmission.items()
+        }
 
-        score = weakest_peak
-
-        candidates.append(CombinedWindowResult(
-            center=float(center), lo=float(lo), hi=float(hi),
+        result = CombinedWindowResult(
+            center=center, lo=lo, hi=hi,
             peak_alpha=peak_alpha, line_position=peak_positions, fwhm=fwhm,
             worst_pair=worst_pair,
-            tau=tau, tau_ok=tau_ok,
-            score=score,
-        ))
+            tau=tau, transmission=transmission, transmission_ok=transmission_ok,
+            score=weakest_peak,
+        )
+        candidates.append((result, window_spectrum))
 
     if candidates:
-        best_weakest = max(min(c.peak_alpha.values()) for c in candidates)
-        candidates = [c for c in candidates if min(c.peak_alpha.values()) >= 1e-3 * best_weakest]
+        best_weakest = max(min(c.peak_alpha.values()) for c, _ in candidates)
+        candidates = [(c, spec) for c, spec in candidates if min(c.peak_alpha.values()) >= 1e-3 * best_weakest]
 
-    candidates.sort(key=lambda c: c.score, reverse=True)
+    candidates.sort(key=lambda cs: cs[0].score, reverse=True)
 
-    selected = []
-    for c in candidates:
-        # Each candidate's own width as the exclusion radius, since windows
-        # are no longer a uniform global size.
-        if any(abs(c.center - s.center) < (c.hi - c.lo) for s in selected):
+    selected, selected_spectra = [], []
+    for c, spec in candidates:
+        if any(abs(c.center - s.center) < delta_sigma for s in selected):
             continue
         selected.append(c)
+        selected_spectra.append(spec)
         if len(selected) >= config.max_windows:
             break
 
-    species_spectra = {name: d["alpha"] for name, d in species.items()}
-    return CombinedSearchResult(selected, nu_grid, species_spectra)
+    return CombinedSearchResult(selected, selected_spectra)

@@ -19,6 +19,7 @@ from .constants import P_REF, T_REF
 
 _AMU_TO_G = 1.66053873e-24  # 1 amu in grams (CGS, consistent with hapi.cBolts/cc)
 
+
 def doppler_fwhm(nu0: float, molec_id: int, iso_id: int, T: float) -> float:
     """Gaussian Doppler FWHM (cm^-1) at temperature T (K). Pressure-independent."""
     m_grams = molecularMass(molec_id, iso_id) * _AMU_TO_G
