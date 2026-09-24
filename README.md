@@ -76,7 +76,14 @@ plausible answer. So the search runs in two passes:
 - Search range `sigma_min`/`sigma_max` (cm^-1), temperature `T` (K), pressure `P` (atm) -- P matters
   a lot: at 1 atm, collisional broadening alone can eat most of a narrow `delta_sigma` window
   (see Known limitations).
-- `s_cutoff`: minimum HITRAN line intensity (cm^-1/(molecule*cm^-2)) at T, used to drop negligible lines (~1e-28 to 1e-25 is the typical range).
+- `proxy_cutoff`: a line counts as "strong" if its PROXY intensity (sw * n_total(P,T) *
+  mole_fraction, cm^-2, default 1e-12) is >= this. Filtering on the proxy rather than raw HITRAN
+  sw puts every species on the same footing regardless of concentration -- a raw-sw cutoff shared
+  across a 1 ppm trace gas and 30% H2O isn't comparable (a "weak" H2O line still out-absorbs a
+  "strong" N2O one). A per-species-relative cutoff doesn't work either: CH4/N2O have much
+  stronger fundamental bands elsewhere in a wide search range than in a combination-band region,
+  which made weaker (but still real) regions vanish entirely when compared to that species' own
+  global best line.
 - `delta_sigma`: window width (cm^-1), a real hardware constraint (e.g. a DFB laser's current-tuning
   range), default 0.35 -- NOT auto-derived.
 - `n_separation`: required gap between every PAIR of targets, in units of the larger of the two lines' Voigt FWHM -- a hard filter.
