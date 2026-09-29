@@ -1,0 +1,47 @@
+# Standard atmospheric concentrations (mole fraction, 0-1) used as background
+# interferers -- see hitran_tool/interference.py. 1e-12 = 1 ppt.
+# A molecule that is also a target is taken from the targets instead (their
+# concentration wins), so it can stay listed here.
+molecule,mole_fraction
+H2O,11.7e-3
+CO2,369e-6
+O3,22.2e-9
+N2O,317e-9
+CO,191e-9
+CH4,1.86e-6
+O2,0.212
+NO,257e-12
+SO2,100e-12
+NO2,3.04e-9
+NH3,100e-12
+HNO3,181e-12
+OH,1e-12
+HF,1e-12
+HCl,1e-12
+HBr,1e-12
+HI,1e-12
+ClO,7.4e-15
+OCS,600e-12
+H2CO,1e-12
+HOCl,1e-12
+N2,0.789
+HCN,550e-12
+CH3Cl,1e-12
+H2O2,178e-12
+C2H2,1.35e-9
+C2H6,2.67e-9
+PH3,1e-12
+COF2,75e-15
+SF6,4.1e-12
+H2S,1e-12
+HCOOH,1e-12
+HO2,1e-12
+O,1e-12
+ClONO2,100e-15
+NO+,1e-12
+HOBr,1e-12
+C2H4,1e-12
+CH3OH,1e-12
+CH3Br,1e-12
+CH3CN,1e-12
+CF4,1e-12

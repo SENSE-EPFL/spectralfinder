@@ -1,5 +1,5 @@
 """Candidate spectral-window search and ranking, in TWO STAGES (per the
-project supervisor's proposed workflow):
+project supervisor's proposed workflow), plus per-window diagnostics:
 
   STAGE 1 -- fast/coarse candidate search, over the FULL search range.
     Uses only line POSITIONS and a cheap intensity PROXY (line strength S(T)
@@ -12,10 +12,14 @@ project supervisor's proposed workflow):
     NOW compute the real absorption spectrum (Doppler + collisional
     broadening, exact HAPI Voigt profile) but only over each candidate's
     narrow window (delta_sigma, e.g. 0.3-0.4 cm^-1 -- a DFB laser's current-
-    scan range), which is cheap precisely because the range is tiny. Convert
-    to a real peak alpha (cm^-1), then to transmission = exp(-alpha * L_cm)
-    at the instrument's real, fixed path length, and flag whether that falls
-    in the acceptable range.
+    scan range), which is cheap precisely because the range is tiny. Take
+    alpha AT each target's selected line, convert to transmission
+    = exp(-alpha * L_cm) at the instrument's real, fixed path length, and
+    flag whether that falls in the acceptable range.
+
+  DIAGNOSTICS -- only on the final ranked windows, reported, never used to
+    filter or rank: background interferers (interference.py) and temperature
+    sensitivity (temperature.py).
 
 Doing it the other way around -- full-width, full-physics spectra over the
 whole search range before even looking for candidates -- is what made the
@@ -23,36 +27,49 @@ single-stage version of this function slow (tens of seconds to minutes):
 HAPI's per-line Python loop pays for every line in range regardless of how
 much of that range is ever a plausible answer.
 
-Only the target gases themselves are modelled: every PAIR of target species
-must have their strongest in-window line >= n_separation * max(FWHM) apart,
-or their signals can't be attributed to either gas. There is no separate
-"background interferer" concept -- if a species matters, it belongs in
-`targets`.
+Every PAIR of targets must have their selected in-window lines
+>= n_separation * max(FWHM) apart, or their signals can't be attributed to
+either gas. Isotopologues are separate targets (TargetSpecies.iso_id), so
+e.g. CH4 and (13C)H4 are checked against each other like any two gases.
 
 See find_combined_windows()'s own docstring for the full algorithm.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from math import exp, log10
 
 import numpy as np
 
 from .broadening import doppler_fwhm, lorentz_fwhm, voigt_fwhm
+from .interference import compute_interference, ensure_interferer_lines, interferer_list
 from .lines import ensure_lines, line_arrays
-from .spectrum import absorption_coefficient, number_density, optical_depth
-from .species import molecule_id
+from .spectrum import absorption_coefficient, number_density, optical_depth, window_grid
+from .species import molecule_id, natural_abundance, species_label
+from .temperature import temperature_dependence
 
 # Stage 2 hands HAPI a narrow, already-selected window -- this just keeps numerically-zero
-# lines out of its sum, it's not a presence decision (that's SearchConfig.s_relative_floor).
+# lines out of its sum, it's not a presence decision (that's SearchConfig.proxy_cutoff).
 _HAPI_INTENSITY_FLOOR = 1e-30
+
+# A species' spectrum is flagged (CombinedWindowResult.peak_is_window_max = False) when
+# something else in the window -- another of its lines, or the wing of a strong line just
+# outside -- reaches more than this factor times alpha at its selected line.
+_WINDOW_MAX_TOLERANCE = 1.05
 
 
 @dataclass
 class TargetSpecies:
-    name: str
-    mole_fraction: float  # 0-1; use ppm_to_fraction()/percent_to_fraction() to convert
-    iso_id: int = 1
+    name: str  # HITRAN molecule name, e.g. 'CH4'
+    mole_fraction: float  # 0-1, of the WHOLE molecule (all isotopologues); use ppm_to_fraction() etc.
+    iso_id: int = 1  # HITRAN isotopologue number: 1 = principal, e.g. CH4 iso 2 = (13C)H4
+    abundance: float | None = None  # this isotopologue's share of the molecule; None = natural
+    # (HITRAN) abundance. Set it only to simulate a non-natural isotopic composition.
+
+    @property
+    def label(self) -> str:
+        """Key used in every result dict: 'CH4' for iso 1, the HITRAN formula otherwise."""
+        return species_label(self.name, self.iso_id)
 
 
 @dataclass
@@ -83,43 +100,72 @@ class SearchConfig:
     transmission_min: float = 0.80
     transmission_max: float = 0.95
     # Flags CombinedWindowResult.transmission_ok, does not filter.
+    # Saturation filter (this one DOES filter): the TOTAL transmission the detector sees,
+    # anywhere across the scanned window -- all targets + all interferers summed, e.g. the
+    # wing of a saturated H2O line at the window's edge -- must stay >= this. Deliberately
+    # separate from transmission_min (which only flags each target's own line): 0.5 = reject
+    # windows where more than half the light is absorbed somewhere in the scan.
+    window_transmission_min: float = 0.5
     max_windows: int = 10
     max_stage1_candidates: int = 200  # cap on how many stage-1 candidates get the expensive stage-2 treatment
-    wavenumber_step: float = 0.01  # cm^-1, spectral grid resolution used in stage 2
+    # Spectral grid step in stage 2 (cm^-1). Only shapes the plotted curves: alpha AT each
+    # selected line is exact whatever the step (the line centers are added to the grid, see
+    # spectrum.window_grid). Keep it well below the narrowest FWHM (~0.008 cm^-1 at 30 mbar).
+    wavenumber_step: float = 0.002
+    # Temperature sweep (temperature.py): alpha at T, T+dT, ..., T+steps*dT, constant P.
+    temperature_step_K: float = 1.0
+    temperature_steps: int = 5
 
 
 @dataclass
 class CombinedWindowResult:
     """One window where EVERY target species has a detectable, mutually
     distinguishable line -- for a single instrument setting that sees several
-    gases at once."""
+    gases at once. Every dict is keyed by TargetSpecies.label."""
     center: float
     lo: float
     hi: float
-    peak_alpha: dict  # {species_name: peak alpha in window, cm^-1} -- real Voigt profile (stage 2)
-    line_position: dict  # {species_name: position of its strongest in-window line, cm^-1}
-    fwhm: dict  # {species_name: Voigt FWHM of that line, cm^-1}
+    line_position: dict  # {species: center of its SELECTED line (the one the window was picked
+    # for), pressure-shifted, cm^-1}
+    peak_alpha: dict  # {species: alpha AT that line, cm^-1 -- real Voigt profile (stage 2)}
+    fwhm: dict  # {species: Voigt FWHM of that line, cm^-1}
     worst_pair: tuple | None  # (name_a, name_b, separation, required) -- the tightest pair; None if
     # only one target was searched (no pair to check). Diagnostic only: every window here already
     # passed the separation check, so this isn't a pass/fail flag.
-    tau: dict  # {species_name: optical depth -ln(I/I0) = peak_alpha * L_cm, at the instrument's real L}
-    transmission: dict  # {species_name: I/I0 = exp(-tau)}
-    transmission_ok: dict  # {species_name: True if transmission_min <= transmission <= transmission_max}
-    score: float = 0.0  # weakest real peak_alpha across species -- diagnostic only, NOT the
-    # ranking key: windows are ranked by _rank_key() (species in transmission range first,
-    # then distance-from-range), not by raw peak strength alone.
+    tau: dict  # {species: optical depth -ln(I/I0) = peak_alpha * L_cm, at the instrument's real L}
+    transmission: dict  # {species: I/I0 = exp(-tau)}
+    transmission_ok: dict  # {species: True if transmission_min <= transmission <= transmission_max}
+    window_max_alpha: dict  # {species: max of its alpha anywhere in the window}
+    window_max_position: dict  # {species: where that max is}
+    peak_is_window_max: dict  # {species: False if something else in the window (another line, or
+    # the wing of a strong line just outside) is clearly stronger than the selected line}
+    window_min_transmission: float = 1.0  # lowest TOTAL I/I0 (all species) across the window
+    window_min_position: float = 0.0  # where that is, cm^-1
+    score: float = 0.0  # weakest peak_alpha across species -- diagnostic only, NOT the ranking
+    # key: windows are ranked by _rank_key() (species in transmission range first, then
+    # distance-from-range), not by raw peak strength alone.
+    # --- diagnostics, filled for the final windows only (never used to rank) ---
+    interferers: list = field(default_factory=list)  # [InterfererResult], strongest first
+    interference: dict = field(default_factory=dict)  # {species: sum of every OTHER species' alpha
+    # (interferers AND the other targets) at its line / its own alpha there}
+    main_interferer: dict = field(default_factory=dict)  # {species: biggest contributor there, or None}
+    temperature_coeff: dict = field(default_factory=dict)  # {species: d(alpha)/alpha/dT, %/K}
+    temperature_sweep: dict = field(default_factory=dict)  # {species: [(T, alpha), ...]}
+    ratio_temperature_coeff: dict = field(default_factory=dict)  # {'a/b': %/K} for isotopologue pairs
 
 
 @dataclass
 class CombinedSearchResult:
     """Return value of find_combined_windows(): the ranked windows plus, for
-    plotting, each window's OWN narrow stage-2 spectra -- there's no single
-    shared spectrum any more (unlike the old single-stage version): every
-    window has its own tiny [lo, hi] range, computed independently.
-    `window_spectra[i]` is a {species_name: (nu_grid, alpha)} dict matching
-    `windows[i]`."""
+    plotting, each window's OWN narrow stage-2 spectra -- every window has its
+    own tiny [lo, hi] range, computed independently.
+    `window_spectra[i]` is {target_label: (nu_grid, alpha)} and
+    `interferer_spectra[i]` is {interferer_label: (nu_grid, alpha)}, both
+    matching `windows[i]`."""
     windows: list
     window_spectra: list
+    interferer_spectra: list = field(default_factory=list)
+    n_rejected_saturated: int = 0  # ranked candidates dropped by the window_transmission_min filter
 
 
 def _line_fwhm(m_id: int, iso_id: int, nu0: float, gamma_air: float, gamma_self: float,
@@ -127,6 +173,46 @@ def _line_fwhm(m_id: int, iso_id: int, nu0: float, gamma_air: float, gamma_self:
     f_d = doppler_fwhm(nu0, m_id, iso_id, T)
     f_l = lorentz_fwhm(gamma_air, gamma_self, n_air, T, P, self_fraction)
     return voigt_fwhm(f_l, f_d)
+
+
+def _separation(peak_positions: dict, fwhm: dict, n_separation: float) -> tuple:
+    """(all pairs separated?, tightest pair (a, b, separation, required) or None)."""
+    names = list(peak_positions)
+    ok, worst_pair, worst_margin = True, None, float("inf")
+    for i in range(len(names)):
+        for j in range(i + 1, len(names)):
+            a, b = names[i], names[j]
+            sep = abs(peak_positions[a] - peak_positions[b])
+            required = n_separation * max(fwhm[a], fwhm[b])
+            if sep < required:
+                ok = False
+            if sep - required < worst_margin:
+                worst_margin, worst_pair = sep - required, (a, b, sep, required)
+    return ok, worst_pair
+
+
+def _nearest_line(d: dict, position: float, lo: float, hi: float, config) -> tuple | None:
+    """(pressure-shifted center, Voigt FWHM) of species d's line closest to `position`
+    among its lines inside [lo, hi] -- used to re-pick a species' selected line when
+    stage 2 finds another of its lines taller than the stage-1 choice."""
+    L = d["lines"]
+    shifted = L["nu"] + L["delta_air"] * config.P
+    inside = np.nonzero((L["nu"] >= lo) & (L["nu"] <= hi))[0]
+    if inside.size == 0:
+        return None
+    k = inside[int(np.argmin(np.abs(shifted[inside] - position)))]
+    t = d["target"]
+    return float(shifted[k]), _line_fwhm(d["m_id"], t.iso_id, float(L["nu"][k]), L["gamma_air"][k],
+                                         L["gamma_self"][k], L["n_air"][k], config.T, config.P, t.mole_fraction)
+
+
+def _target_spectra(species: dict, grid: np.ndarray, config) -> dict:
+    out = {}
+    for name, d in species.items():
+        t = d["target"]
+        out[name] = absorption_coefficient(d["table"], d["m_id"], t.iso_id, t.mole_fraction, grid,
+                                           config.T, config.P, _HAPI_INTENSITY_FLOOR, t.abundance)
+    return out
 
 
 def _range_penalty(tr: float, tmin: float, tmax: float) -> float:
@@ -154,17 +240,26 @@ def _rank_key(c: CombinedWindowResult, tmin: float, tmax: float) -> tuple:
     return (n_ok, -penalty)
 
 
-def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearchResult:
+def find_combined_windows(targets: list, config: SearchConfig,
+                          background: dict | None = None) -> CombinedSearchResult:
     """Find windows where EVERY target has a detectable line, all mutually
     distinguishable -- for a single instrument setting that measures several
     gases at once in one scan (the actual "simultaneous CH4/CO2/N2O
     detection" case from the project brief: one measurement, every target
     gas visible in it).
 
+    targets: list of TargetSpecies. Two isotopologues of one molecule are two
+      targets (same name, different iso_id).
+    background: {molecule: mole_fraction} of background gases to check as
+      interferers (e.g. species.load_background('atm_standard.csv')); None
+      skips the interference check. Minor isotopologues of the targets are
+      checked either way.
+
     STAGE 1 (cheap, whole range):
-      0. Load each target's lines (positions, T-corrected intensity S(T),
-         broadening parameters) -- no spectrum computed yet.
-      1. proxy_intensity per line = S(T) * n_total(P,T) * mole_fraction.
+      0. Load each target's lines (its own isotopologue only: positions,
+         T-corrected intensity S(T), broadening parameters) -- no spectrum yet.
+      1. proxy_intensity per line = S(T) * n_total(P,T) * mole_fraction
+         (* abundance / natural_abundance if a non-natural abundance is set).
          This has units of cm^-2, NOT alpha's cm^-1 -- it deliberately skips
          the line shape (no width, no Voigt) so it's cheap to compute for
          every line. It's only used to RANK candidates against each other,
@@ -172,7 +267,8 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
       2. Candidate centers = every target's own strong-line positions.
       3. For each candidate: does EVERY species have a strong line within
          delta_sigma of it? If not, reject. Otherwise take each species'
-         strongest such line (by proxy_intensity) as its representative.
+         strongest such line (by proxy_intensity) as its representative --
+         its SELECTED line, the one reported/plotted as "the" peak.
       4. Pairwise separation check (>= n_separation * max(FWHM), FWHM from
          the cheap analytic formula in broadening.py -- still no full
          spectrum). Reject if any pair fails.
@@ -184,17 +280,31 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
       6. For each surviving candidate, compute the REAL absorption spectrum
          (exact HAPI Voigt profile, real Doppler+collisional widths) for
          each species, but ONLY over that candidate's own
-         [center - delta_sigma/2, center + delta_sigma/2] -- cheap because
-         the range is tiny, not because the physics is approximated.
-      7. tau = peak_alpha * L_cm (instrument's real path length);
-         transmission = exp(-tau); flag transmission_ok against
-         [transmission_min, transmission_max] (see CombinedWindowResult.transmission_ok).
+         [center - delta_sigma/2, center + delta_sigma/2], on a grid that
+         includes the selected line centers exactly.
+      7. peak_alpha = alpha AT the selected line -- not the window's max,
+         which can instead be the wing of a strong line just outside the
+         window (flagged: peak_is_window_max).
+         tau = peak_alpha * L_cm; transmission = exp(-tau); flag
+         transmission_ok against [transmission_min, transmission_max].
       8. Filter out survivors whose weakest peak is negligible next to the best
          one found (< 0.1%). Rank by _rank_key: how many species land inside
-         [transmission_min, transmission_max] first (a window good for all
-         targets beats one good for only some, even with weaker raw peaks),
-         then by total log-distance-from-range for whichever species are
-         still outside it. Sort, dedup, keep top max_windows.
+         [transmission_min, transmission_max] first, then by total
+         log-distance-from-range for whichever species are still outside it.
+         Sort, dedup.
+         Before step 7, a species whose real spectrum shows ANOTHER of its
+         lines in the window standing taller than the stage-1 pick gets that
+         line as its selected line instead (if the separation check still
+         passes with it).
+
+    SATURATION FILTER + DIAGNOSTICS (walking the ranked list until
+    max_windows windows pass):
+      9. Interferers: see interference.py.
+     10. Total transmission across the window (targets + interferers):
+         reject the window if it drops below window_transmission_min
+         anywhere (e.g. a saturated line's wing at the window edge).
+     11. Temperature sensitivity (%/K per species, and per isotopologue
+         ratio): see temperature.py.
 
     Returns a CombinedSearchResult: .windows is the ranked list of
     CombinedWindowResult (best first, up to max_windows), plus the
@@ -206,13 +316,20 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
     # ============================== STAGE 1 ==============================
     species = {}
     for t in targets:
-        table = ensure_lines(t.name, config.sigma_min, config.sigma_max, t.iso_id)
-        lines_ = line_arrays(table, config.sigma_min, config.sigma_max, config.T)
+        table = ensure_lines(t.name, config.sigma_min, config.sigma_max)
+        lines_ = line_arrays(table, config.sigma_min, config.sigma_max, config.T, iso_id=t.iso_id)
         m_id = molecule_id(t.name)
+        abundance_scale = 1.0 if t.abundance is None else t.abundance / natural_abundance(t.name, t.iso_id)
         # proxy_intensity: S(T) * N_species, no line shape -- see module docstring.
-        proxy = lines_["sw"] * (n_total * t.mole_fraction)
+        proxy = lines_["sw"] * (n_total * t.mole_fraction * abundance_scale)
         strong = proxy >= config.proxy_cutoff
-        species[t.name] = dict(target=t, m_id=m_id, lines=lines_, strong=strong, proxy=proxy)
+        # Strong-line indices sorted by position, computed once: the candidate loop below
+        # then finds each window's lines with a binary search instead of re-scanning every
+        # line of every species for every candidate (was most of the runtime).
+        idx_strong = np.nonzero(strong)[0]
+        idx_strong = idx_strong[np.argsort(lines_["nu"][idx_strong], kind="stable")]
+        species[t.label] = dict(target=t, table=table, m_id=m_id, lines=lines_, strong=strong, proxy=proxy,
+                                idx_strong=idx_strong, nu_strong=lines_["nu"][idx_strong])
 
     all_centers = np.sort(np.concatenate(
         [d["lines"]["nu"][d["strong"]] for d in species.values() if np.any(d["strong"])]
@@ -225,16 +342,17 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
         peak_positions, fwhm, proxy_val = {}, {}, {}
         complete = True
         for name, d in species.items():
-            idx_strong = np.nonzero(d["strong"])[0]
-            nus = d["lines"]["nu"][idx_strong]
-            in_win = (nus >= lo) & (nus <= hi)
-            if not np.any(in_win):
+            a = np.searchsorted(d["nu_strong"], lo, side="left")  # same [lo, hi] inclusive bounds as before
+            b = np.searchsorted(d["nu_strong"], hi, side="right")
+            if a >= b:
                 complete = False
                 break
-            candidates_here = idx_strong[in_win]
+            candidates_here = d["idx_strong"][a:b]
             k = candidates_here[int(np.argmax(d["proxy"][candidates_here]))]
             nu0 = float(d["lines"]["nu"][k])
-            peak_positions[name] = nu0
+            # Pressure-shifted center: that's where the line actually peaks (same shift
+            # HAPI applies in stage 2). ~1e-4 cm^-1 at 30 mbar, up to ~1e-2 at 1 atm.
+            peak_positions[name] = nu0 + float(d["lines"]["delta_air"][k]) * config.P
             proxy_val[name] = float(d["proxy"][k])
             fwhm[name] = _line_fwhm(
                 d["m_id"], d["target"].iso_id, nu0, d["lines"]["gamma_air"][k],
@@ -244,19 +362,7 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
         if not complete:
             continue
 
-        names = list(peak_positions)
-        separation_ok = True
-        worst_pair, worst_margin = None, float("inf")
-        for i in range(len(names)):
-            for j in range(i + 1, len(names)):
-                a, b = names[i], names[j]
-                sep = abs(peak_positions[a] - peak_positions[b])
-                required = config.n_separation * max(fwhm[a], fwhm[b])
-                if sep < required:
-                    separation_ok = False
-                margin = sep - required
-                if margin < worst_margin:
-                    worst_margin, worst_pair = margin, (a, b, sep, required)
+        separation_ok, worst_pair = _separation(peak_positions, fwhm, config.n_separation)
         if not separation_ok:
             continue
 
@@ -277,24 +383,47 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
     # ============================== STAGE 2 ==============================
     candidates = []
     for _, center, lo, hi, peak_positions, fwhm, worst_pair in stage1_selected:
-        peak_alpha = {}
+        grid = window_grid(lo, hi, config.wavenumber_step, peak_positions.values())
+        alphas = _target_spectra(species, grid, config)
+
+        # Stage 1 picks each species' line by integrated intensity S; the real spectrum can
+        # show another of its lines in the window standing TALLER (narrower line, or a blend).
+        # Re-pick that one if the separation check still passes with it. An argmax at the
+        # grid's first/last point isn't a line of the window but the wing of a line outside
+        # it -- nothing to re-pick there (the saturation filter below handles it).
+        repicked = False
+        for name, d in species.items():
+            alpha = alphas[name]
+            k = int(np.argmax(alpha))
+            at_line = float(alpha[int(np.argmin(np.abs(grid - peak_positions[name])))])
+            if not (0 < k < len(grid) - 1 and alpha[k] > _WINDOW_MAX_TOLERANCE * at_line):
+                continue
+            alt = _nearest_line(d, float(grid[k]), lo, hi, config)
+            if alt is None or alt[0] == peak_positions[name]:
+                continue
+            trial_pos, trial_fwhm = dict(peak_positions, **{name: alt[0]}), dict(fwhm, **{name: alt[1]})
+            sep_ok, trial_worst = _separation(trial_pos, trial_fwhm, config.n_separation)
+            if sep_ok:
+                peak_positions, fwhm, worst_pair, repicked = trial_pos, trial_fwhm, trial_worst, True
+        if repicked:  # new line centers must be on the grid for alpha to be exact there
+            grid = window_grid(lo, hi, config.wavenumber_step, peak_positions.values())
+            alphas = _target_spectra(species, grid, config)
+
+        peak_alpha, window_max_alpha, window_max_position = {}, {}, {}
         window_spectrum = {}
         ok = True
-        for name, d in species.items():
-            table = ensure_lines(name, lo, hi, d["target"].iso_id)  # sub-range already covered from stage 1
-            nu_grid, alpha = absorption_coefficient(
-                table, d["m_id"], d["target"].iso_id, d["target"].mole_fraction,
-                lo, hi, config.T, config.P, config.wavenumber_step, _HAPI_INTENSITY_FLOOR,
-            )
-            if alpha.size == 0 or float(alpha.max()) <= 0:
+        for name, alpha in alphas.items():
+            at_line = float(alpha[int(np.argmin(np.abs(grid - peak_positions[name])))])
+            if at_line <= 0:
                 ok = False
                 break
-            peak_alpha[name] = float(alpha.max())
-            window_spectrum[name] = (nu_grid, alpha)
+            k = int(np.argmax(alpha))
+            peak_alpha[name] = at_line
+            window_max_alpha[name] = float(alpha[k])
+            window_max_position[name] = float(grid[k])
+            window_spectrum[name] = (grid, alpha)
         if not ok:
             continue
-
-        weakest_peak = min(peak_alpha.values())
 
         tau = {name: optical_depth(p, config.L_cm) for name, p in peak_alpha.items()}
         transmission = {name: exp(-t) for name, t in tau.items()}
@@ -305,26 +434,53 @@ def find_combined_windows(targets: list, config: SearchConfig) -> CombinedSearch
 
         result = CombinedWindowResult(
             center=center, lo=lo, hi=hi,
-            peak_alpha=peak_alpha, line_position=peak_positions, fwhm=fwhm,
+            line_position=peak_positions, peak_alpha=peak_alpha, fwhm=fwhm,
             worst_pair=worst_pair,
             tau=tau, transmission=transmission, transmission_ok=transmission_ok,
-            score=weakest_peak,
+            window_max_alpha=window_max_alpha, window_max_position=window_max_position,
+            peak_is_window_max={
+                n: window_max_alpha[n] <= _WINDOW_MAX_TOLERANCE * peak_alpha[n] for n in peak_alpha
+            },
+            score=min(peak_alpha.values()),
         )
         candidates.append((result, window_spectrum))
 
     if candidates:
-        best_weakest = max(min(c.peak_alpha.values()) for c, _ in candidates)
-        candidates = [(c, spec) for c, spec in candidates if min(c.peak_alpha.values()) >= 1e-3 * best_weakest]
+        best_weakest = max(c.score for c, _ in candidates)
+        candidates = [(c, spec) for c, spec in candidates if c.score >= 1e-3 * best_weakest]
 
     candidates.sort(key=lambda cs: _rank_key(cs[0], config.transmission_min, config.transmission_max), reverse=True)
 
-    selected, selected_spectra = [], []
+    # ================ SATURATION FILTER + DIAGNOSTICS ====================
+    # Walked in rank order, lazily: interferers are only computed for candidates that could
+    # still make the final list, until max_windows have passed -- computing them for every
+    # stage-2 candidate would cost ~2 s each for nothing.
+    interferers = interferer_list(targets, background or {})
+    ensure_interferer_lines(interferers, config.sigma_min, config.sigma_max)
+    selected, selected_spectra, interferer_spectra = [], [], []
+    n_rejected = 0
     for c, spec in candidates:
         if any(abs(c.center - s.center) < delta_sigma for s in selected):
             continue
+        grid = next(iter(spec.values()))[0]
+        target_alpha = {name: alpha for name, (_, alpha) in spec.items()}
+        c.interferers, spectra, c.interference, c.main_interferer = compute_interference(
+            c, grid, interferers, config, target_alpha)
+
+        total_alpha = sum(target_alpha.values()) + sum(spectra.values(), np.zeros_like(grid))
+        total_tr = np.exp(-total_alpha * config.L_cm)
+        k = int(np.argmin(total_tr))
+        c.window_min_transmission, c.window_min_position = float(total_tr[k]), float(grid[k])
+        if c.window_min_transmission < config.window_transmission_min:
+            n_rejected += 1
+            continue
+
+        c.temperature_coeff, c.temperature_sweep, c.ratio_temperature_coeff = temperature_dependence(
+            c, targets, config)
         selected.append(c)
         selected_spectra.append(spec)
+        interferer_spectra.append({label: (grid, alpha) for label, alpha in spectra.items()})
         if len(selected) >= config.max_windows:
             break
 
-    return CombinedSearchResult(selected, selected_spectra)
+    return CombinedSearchResult(selected, selected_spectra, interferer_spectra, n_rejected)

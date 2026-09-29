@@ -18,8 +18,9 @@ CH4-N2O instrument, 4398.15 cm^-1 -- the one the search should ideally
 surface now that transmission_min/max, delta_sigma and P are confirmed
 real values rather than placeholders.
 """
-from hitran_tool import SearchConfig, TargetSpecies, find_combined_windows, percent_to_fraction, ppm_to_fraction
-from hitran_tool.report import print_combined_report, save_combined_window_details
+from hitran_tool import (SearchConfig, TargetSpecies, find_combined_windows, load_background,
+                         percent_to_fraction, ppm_to_fraction)
+from hitran_tool.report import print_combined_report, save_combined_window_details, save_results_csv
 
 # --- parameters -------------------------------------------------------
 
@@ -27,7 +28,14 @@ targets = [
     TargetSpecies(name="CH4", mole_fraction=ppm_to_fraction(10)),
     TargetSpecies(name="N2O", mole_fraction=ppm_to_fraction(1)),
     TargetSpecies(name="H2O", mole_fraction=percent_to_fraction(30)),
+    # Isotopologues are separate targets: same molecule, same (total) mole fraction,
+    # different iso_id -- HITRAN's natural abundance gives its share. E.g. 13CH4:
+    # TargetSpecies(name="CH4", mole_fraction=ppm_to_fraction(10), iso_id=2),
 ]
+
+# Background gases checked as interferers in every final window (reported, not ranked on).
+# A molecule that's also a target takes the target's concentration instead.
+background = load_background("atm_standard.csv")
 
 config = SearchConfig(
     sigma_min=2000.0,
@@ -38,16 +46,22 @@ config = SearchConfig(
     n_separation=3.0,  # confirmed
     transmission_min=0.80,  # target 5-20% signal attenuation -> I/I0 in [0.80, 0.95]
     transmission_max=0.95,
+    window_transmission_min=0.5,  # FILTER: reject a window if the total I/I0 (all species) drops
+    # below this anywhere in the scan -- e.g. a saturated H2O line's wing at the edge
     T=296.0,
     P=30 / 1013.25,  # 30 mbar, confirmed value for the SubOcean instrument
     max_windows=10,
+    temperature_step_K=1.0,  # T sensitivity: alpha at T, T+1, ..., T+5 K (constant P)
+    temperature_steps=5,
 )
 
 # --- run ----------------------------------------------------------------
 
 if __name__ == "__main__":
-    result = find_combined_windows(targets, config)
-    print_combined_report(result, [t.name for t in targets])
+    result = find_combined_windows(targets, config, background)
+    print_combined_report(result, [t.label for t in targets])
 
     paths = save_combined_window_details(result, "window_details")
     print(f"\nSaved {len(paths)} per-window plots to window_details/")
+    csv_paths = save_results_csv(result, "results")
+    print(f"Saved {', '.join(csv_paths)}")

@@ -6,10 +6,13 @@ __pycache__/
 data/*.data
 data/*.header
 data/*.fetched_range.json
+data/*.npz
+data/_fetch/
 
 # generated outputs
 *.png
 *.log
 window_details/
+results/
 
 .DS_Store
