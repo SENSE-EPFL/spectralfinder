@@ -1,5 +1,7 @@
-"""Background-interferer check for a selected window (reported, never used
-to filter or rank -- see find_combined_windows).
+"""Background-interferer check for a selected window. The interference ratio
+is reported only, never used to rank; the interferers' spectra DO feed the
+saturation filter (total transmission across the window, see
+find_combined_windows).
 
 Who counts as an interferer:
   - every molecule of the background list (atm_standard.csv), at its
@@ -7,8 +9,9 @@ Who counts as an interferer:
     '(13C)(16O)2' is not the same molecule spectrally as '(12C)(16O)2');
   - the OTHER isotopologues of each target molecule, at the target's own
     mole fraction (e.g. target H2O at 30% -> HD(16O), H2(18O)... at 30% H2O
-    with natural abundance). An isotopologue that is itself a target is not
-    an interferer -- the separation check already handles target pairs.
+    with natural abundance). An isotopologue that is itself a target isn't
+    in this list -- it's passed separately (target_alpha) and counted in the
+    ratio of the OTHER targets only.
 A background molecule that is also a target is taken from the targets (its
 concentration wins), so H2O isn't counted once at 30% and again at 1.17%.
 
