@@ -18,12 +18,12 @@ concentration wins), so H2O isn't counted once at 30% and again at 1.17%.
 What's measured, per window:
   - per interferer: its own peak alpha in the window (+ position), and its
     transmission exp(-peak_alpha * L_cm) at the instrument's path length;
-  - per target: alpha of every OTHER species AT that target's line center
-    -- that's what actually biases the measurement -- summed, divided by the
-    target's own alpha there ('interference ratio'), plus which one
+  - per target: alpha of every OTHER species AT that target's selected
+    peak -- that's what actually biases the measurement -- summed, divided
+    by the target's own alpha there ('interference ratio'), plus which one
     contributes most. "Other species" includes the other TARGETS: the
-    separation check only compares the selected lines' centers, so e.g. the
-    wing of a strong H2O line under a CH4 line isn't caught anywhere else.
+    separation check only compares the selected peaks' positions, so e.g.
+    the wing of a strong H2O line under a CH4 peak isn't caught anywhere else.
 """
 from __future__ import annotations
 
@@ -49,17 +49,27 @@ class InterfererResult:
     peak_alpha: float  # max alpha in the window, cm^-1
     peak_position: float  # where that max is, cm^-1
     transmission: float  # exp(-peak_alpha * L_cm)
-    alpha_at_target: dict  # {target_label: this interferer's alpha at that target's line center, cm^-1}
+    alpha_at_target: dict  # {target_label: this interferer's alpha at that target's peak, cm^-1}
+
+
+def target_molecules(targets: list) -> dict:
+    """{molecule: (mole_fraction, {iso_ids that are targets})}. Raises if two isotopologue
+    targets of one molecule disagree on its mole fraction: it's the WHOLE molecule's, so it
+    can't differ between them (use TargetSpecies.abundance for a non-natural composition)."""
+    out = {}
+    for t in targets:
+        x, isos = out.setdefault(t.name, (t.mole_fraction, set()))
+        if x != t.mole_fraction:
+            raise ValueError(f"targets of {t.name} disagree on its mole fraction ({x} vs {t.mole_fraction})")
+        isos.add(t.iso_id)
+    return out
 
 
 def interferer_list(targets: list, background: dict) -> list:
     """[(molecule, mole_fraction, excluded_iso_ids)], see module docstring."""
-    target_molecules = {}
-    for t in targets:
-        x, isos = target_molecules.setdefault(t.name, (t.mole_fraction, set()))
-        isos.add(t.iso_id)
-    out = [(mol, x, set()) for mol, x in background.items() if mol not in target_molecules]
-    out += [(mol, x, isos) for mol, (x, isos) in target_molecules.items()]
+    molecules = target_molecules(targets)
+    out = [(mol, x, set()) for mol, x in background.items() if mol not in molecules]
+    out += [(mol, x, isos) for mol, (x, isos) in molecules.items()]
     return out
 
 
@@ -77,7 +87,9 @@ def compute_interference(window, grid: np.ndarray, interferers: list, config,
                 {target_label: interference ratio},
                 {target_label: label of the main interferer at that target, or None})."""
     lo, hi = float(grid[0]), float(grid[-1])
-    target_idx = {name: int(np.argmin(np.abs(grid - pos))) for name, pos in window.line_position.items()}
+
+    def at_targets(alpha):  # value at each target's peak -- peaks sit BETWEEN grid points
+        return {name: float(np.interp(pos, grid, alpha)) for name, pos in window.peak_position.items()}
 
     results, spectra = [], {}
     for mol, x, excluded in interferers:
@@ -97,16 +109,16 @@ def compute_interference(window, grid: np.ndarray, interferers: list, config,
                 label=label, molecule=mol, iso_id=iso, mole_fraction=x,
                 peak_alpha=float(alpha[k]), peak_position=float(grid[k]),
                 transmission=exp(-float(alpha[k]) * config.L_cm),
-                alpha_at_target={name: float(alpha[i]) for name, i in target_idx.items()},
+                alpha_at_target=at_targets(alpha),
             ))
             spectra[label] = alpha
 
     results.sort(key=lambda r: r.peak_alpha, reverse=True)
 
     ratio, main = {}, {}
-    for name in window.line_position:
+    for name in window.peak_position:
         contributions = [(r.alpha_at_target[name], r.label) for r in results]
-        contributions += [(float(alpha[target_idx[name]]), other)
+        contributions += [(float(np.interp(window.peak_position[name], grid, alpha)), other)
                           for other, alpha in target_alpha.items() if other != name]
         total = sum(a for a, _ in contributions)
         ratio[name] = total / window.peak_alpha[name]

@@ -22,8 +22,12 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
     """result: as returned by find_combined_windows()."""
     windows = result.windows
     if not windows:
-        print("No window found where all targets have a mutually distinguishable line "
-              "(separation requirement never satisfied).")
+        if result.n_rejected_saturated:
+            print(f"No window left: {result.n_rejected_saturated} candidate(s) had every target "
+                  "distinguishable but were dropped as saturated (window_transmission_min).")
+        else:
+            print("No window found where all targets have a mutually distinguishable line "
+                  "(separation requirement never satisfied).")
         return
 
     names = names or list(windows[0].peak_alpha)
@@ -32,7 +36,7 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
         f"{'#':>2} {'center':>10} {'window':>17} "
         + " ".join(f"{n + ' peak':>14}" for n in names)
         + " " + " ".join(f"{n + ' I/I0':>10}" for n in names)
-        + f" {'in range':>9} {'worst pair':>10}"
+        + f" {'in range':>9}  worst pair"
     )
     print(header)
     print("-" * len(header))
@@ -48,13 +52,14 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
         )
         n_ok = sum(c.transmission_ok.values())
         in_range_str = f"{n_ok}/{len(names)}"
-        pair_str = f"{c.worst_pair[0][:2]}/{c.worst_pair[1][:2]}" if c.worst_pair else "-"
+        pair_str = f"{c.worst_pair[0]}/{c.worst_pair[1]}" if c.worst_pair else "-"  # full labels:
+        # truncating turned isotopologues like '(13C)H4' into an unreadable '(1' 
         print(
             f"{i:>2} {c.center:>10.3f} [{c.lo:>7.3f},{c.hi:>7.3f}] {peaks} {trans} "
-            f"{in_range_str:>9} {pair_str:>10}"
+            f"{in_range_str:>9}  {pair_str}"
         )
     print(
-        "\nunits: center/window in cm^-1, peaks = alpha AT the selected line in cm^-1,"
+        "\nunits: center/window in cm^-1, peaks = alpha at each species' selected peak in cm^-1,"
         "\n       I/I0 = exp(-alpha*L_cm) = transmission (0-1),"
         "\n       [bracketed] I/I0 = outside [transmission_min, transmission_max] (informational, not filtered)."
         "\n       in range = how many of the species are inside that range, e.g. '1/3'."
@@ -66,13 +71,14 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
         print(f"\n({result.n_rejected_saturated} better-ranked window(s) dropped: total I/I0 somewhere in "
               f"the window below window_transmission_min -- saturated.)")
 
-    print("\n=== Per-window detail: selected lines, temperature sensitivity, interferers ===")
+    print("\n=== Per-window detail: selected peaks, temperature sensitivity, interferers ===")
     for i, c in enumerate(windows, 1):
         _print_window_detail(i, c, names)
     print(
-        "\nline      = center of the line the window was selected for (pressure-shifted).\n"
-        "T coeff   = (alpha(T+dT) - alpha(T)) / alpha(T) / dT at that line, constant P (%/K).\n"
-        "interf.   = sum of every other species' alpha at that line / the target's own alpha there\n"
+        "\npeak      = top of the species' real curve in the window (between two of its lines if\n"
+        "            they overlap) -- the point alpha, I/I0, T coeff and interference are read at.\n"
+        "T coeff   = (alpha(T+dT) - alpha(T)) / alpha(T) / dT at that peak, constant P (%/K).\n"
+        "interf.   = sum of every other species' alpha at that peak / the target's own alpha there\n"
         "            ('!' above 1%); main = the biggest single contributor. Other species = the\n"
         "            other targets, the targets' own minor isotopologues, and atm_standard.csv\n"
         "            gases at their standard concentrations. Not used for ranking."
@@ -82,18 +88,18 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
 def _print_window_detail(i: int, c, names: list) -> None:
     print(f"\n#{i}  center {c.center:.3f} cm^-1  [{c.lo:.3f}, {c.hi:.3f}]   "
           f"lowest total I/I0 {c.window_min_transmission:.3f} at {c.window_min_position:.4f}")
-    print(f"    {'species':<14}{'line':>12}{'alpha':>11}{'I/I0':>8}{'T coeff':>10}{'interf.':>10}  main interferer")
+    print(f"    {'species':<14}{'peak':>12}{'alpha':>11}{'I/I0':>8}{'T coeff':>10}{'interf.':>10}  main interferer")
     for n in names:
         tc = c.temperature_coeff.get(n)
         tc_str = f"{tc:+.3f}" if tc is not None else "-"
         itf = c.interference.get(n)
         itf_str = (_pct(itf) + ("!" if itf > _INTERFERENCE_WARN else " ")) if itf is not None else "-"
-        print(f"    {n:<14}{c.line_position[n]:>12.4f}{c.peak_alpha[n]:>11.2e}{c.transmission[n]:>8.3f}"
+        print(f"    {n:<14}{c.peak_position[n]:>12.4f}{c.peak_alpha[n]:>11.2e}{c.transmission[n]:>8.3f}"
               f"{tc_str:>10}{itf_str:>10}  {c.main_interferer.get(n) or '-'}")
         if not c.peak_is_window_max[n]:
             ratio = c.window_max_alpha[n] / c.peak_alpha[n]
             print(f"    {'':<14}! its alpha is {ratio:.1f}x higher at {c.window_max_position[n]:.4f} "
-                  f"(wing of a line outside the window)")
+                  f"({_why_not_max(c, n)})")
     for pair, coeff in c.ratio_temperature_coeff.items():
         print(f"    ratio {pair}: T coeff {coeff:+.3f} %/K")
     if c.interferers:
@@ -104,6 +110,17 @@ def _print_window_detail(i: int, c, names: list) -> None:
         print(f"    top interferers: {top}")
 
 
+_NOT_MAX_REASON = {  # CombinedWindowResult.peak_note -> text
+    "edge": "wing of a line outside the window",
+    "separation": "taller peak inside, not used: too close to another target",
+    "width": "taller peak inside, not used: its width can't be measured in this window",
+}
+
+
+def _why_not_max(c, n: str) -> str:
+    return _NOT_MAX_REASON.get(c.peak_note.get(n), "stronger elsewhere in the window")
+
+
 def save_results_csv(result: CombinedSearchResult, output_dir: str) -> list:
     """Write windows.csv (one row per window x target), interferers.csv (window x
     interferer) and temperature.csv (window x target x T) into output_dir."""
@@ -112,13 +129,13 @@ def save_results_csv(result: CombinedSearchResult, output_dir: str) -> list:
 
     with open(paths[0], "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["window", "center", "lo", "hi", "species", "line_position", "peak_alpha", "fwhm",
+        w.writerow(["window", "center", "lo", "hi", "species", "peak_position", "peak_alpha", "fwhm",
                     "tau", "transmission", "transmission_ok", "window_max_alpha", "window_max_position",
                     "peak_is_window_max", "temperature_coeff_pct_per_K", "interference_ratio",
                     "main_interferer", "window_min_transmission", "window_min_position"])
         for i, c in enumerate(result.windows, 1):
             for n in c.peak_alpha:
-                w.writerow([i, c.center, c.lo, c.hi, n, c.line_position[n], c.peak_alpha[n], c.fwhm[n],
+                w.writerow([i, c.center, c.lo, c.hi, n, c.peak_position[n], c.peak_alpha[n], c.fwhm[n],
                             c.tau[n], c.transmission[n], c.transmission_ok[n], c.window_max_alpha[n],
                             c.window_max_position[n], c.peak_is_window_max[n],
                             c.temperature_coeff.get(n), c.interference.get(n), c.main_interferer.get(n),
@@ -189,11 +206,11 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
 
     ax.axvspan(c.lo, c.hi, color="tab:green", alpha=0.08, label="selected window")
 
-    # The selected line of each target: marker + label, in the species' own color.
+    # The selected peak of each target: marker + label, in the species' own color.
     # If something else in the window is stronger for that species (a wing from a
     # line outside the window, or another line), mark that too, with an x.
     for name in names:
-        pos, a = c.line_position[name], c.peak_alpha[name]
+        pos, a = c.peak_position[name], c.peak_alpha[name]
         ax.axvline(pos, color=colors[name], ls=":", lw=0.8)
         ax.plot(pos, a, "o", ms=8, mfc="none", mec=colors[name], mew=2)
         ax.annotate(f"{name}\n{pos:.4f}", (pos, a), xytext=(0, 10), textcoords="offset points",
@@ -235,9 +252,11 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
         fig.text(x, y, text, ha="left", va="top", fontsize=8, color=color,
                  fontweight="bold" if bold else "normal")
 
-    note = "o = selected line (alpha and I/I0 = exp(-alpha*L_cm) taken there)"
-    if not all(c.peak_is_window_max.values()):
-        note += ";  x = same species stronger elsewhere (wing of a line outside the window)"
+    note = "o = selected peak: top of the curve (alpha and I/I0 = exp(-alpha*L_cm) taken there)"
+    flagged = [n for n in names if not c.peak_is_window_max[n]]
+    if flagged:
+        note += ";  x = same species stronger elsewhere (" + ", ".join(
+            f"{n}: {_why_not_max(c, n)}" for n in flagged) + ")"
     txt(0.06, note)
     y -= line_h
 
@@ -245,7 +264,7 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
     # species name (in its curve's color, to match the plot) and a value that fails its
     # criterion, in red -- so a glance shows WHICH parameter is the problem.
     cols = [0.06, 0.17, 0.28, 0.37, 0.46, 0.57, 0.66]
-    for x, h in zip(cols, ["species", "line (cm$^{-1}$)", "alpha (cm$^{-1}$)", "I/I0",
+    for x, h in zip(cols, ["species", "peak (cm$^{-1}$)", "alpha (cm$^{-1}$)", "I/I0",
                            "T coeff (%/K)", "interf.", "main interferer"]):
         txt(x, h, bold=True)
     y -= line_h
@@ -253,7 +272,7 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
         tc = c.temperature_coeff.get(n)
         itf = c.interference.get(n)
         txt(cols[0], n, color=colors[n], bold=True)
-        txt(cols[1], f"{c.line_position[n]:.4f}")
+        txt(cols[1], f"{c.peak_position[n]:.4f}")
         txt(cols[2], f"{c.peak_alpha[n]:.2e}")
         txt(cols[3], f"{c.transmission[n]:.3f}", color="black" if c.transmission_ok[n] else _RED,
             bold=not c.transmission_ok[n])

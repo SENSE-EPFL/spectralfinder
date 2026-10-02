@@ -1,7 +1,7 @@
 """Temperature sensitivity of a selected window (reported, never used to
 filter or rank).
 
-For each target: alpha AT its selected line center is recomputed at
+For each target: alpha AT its selected peak (position held fixed) is recomputed at
 T, T + dT, T + 2 dT, ... (full HAPI Voigt, same code path as stage 2), at
 CONSTANT PRESSURE -- as in a pressure-regulated cell/cavity, so the number
 density n = P/(kT) drops with T too (about -0.34 %/K near 296 K, the same
@@ -30,11 +30,12 @@ _HAPI_INTENSITY_FLOOR = 1e-30
 def temperature_dependence(window, targets: list, config) -> tuple:
     """Returns ({label: %/K}, {label: [(T, alpha), ...]}, {'a/b': %/K for isotopologue pairs})."""
     dT = config.temperature_step_K
-    temps = [config.T + k * dT for k in range(config.temperature_steps + 1)]
+    # At least T and T + dT: the headline coefficient needs both.
+    temps = [config.T + k * dT for k in range(max(1, config.temperature_steps) + 1)]
 
     sweep, coeff = {}, {}
     for t in targets:
-        pos = window.line_position[t.label]
+        pos = window.peak_position[t.label]
         table = ensure_lines(t.name, config.sigma_min, config.sigma_max)
         alphas = [
             float(absorption_coefficient(table, molecule_id(t.name), t.iso_id, t.mole_fraction,
