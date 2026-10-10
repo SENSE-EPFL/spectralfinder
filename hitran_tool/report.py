@@ -22,16 +22,21 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
     """result: as returned by find_combined_windows()."""
     windows = result.windows
     if not windows:
-        if result.n_rejected_saturated:
-            print(f"No window left: {result.n_rejected_saturated} candidate(s) had every target "
-                  "distinguishable but were dropped as saturated (window_transmission_min).")
+        if result.n_rejected_saturated or result.n_rejected_interference:
+            print(f"No window left: candidates had every target distinguishable, but "
+                  f"{result.n_rejected_interference} were dropped for interference (> interference_max) "
+                  f"and {result.n_rejected_saturated} as saturated (window_transmission_min).")
         else:
             print("No window found where all targets have a mutually distinguishable line "
                   "(separation requirement never satisfied).")
         return
 
     names = names or list(windows[0].peak_alpha)
-    print(f"Top {len(windows)} combined window(s) for {' + '.join(names)}\n")
+    tmin, tmax = result.transmission_range
+    print(f"Top {len(windows)} combined window(s) for {' + '.join(names)}")
+    if tmin is not None:
+        print(f"acceptable I/I0 range: [{tmin:.3f}, {tmax:.3f}]  "
+              f"(absorption {100 * (1 - tmax):.2g}-{100 * (1 - tmin):.2g} %)\n")
     header = (
         f"{'#':>2} {'center':>10} {'window':>17} "
         + " ".join(f"{n + ' peak':>14}" for n in names)
@@ -67,8 +72,11 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
         "\n       separation check -- that part IS a hard filter, so there's no pass/fail column for it)."
     )
 
+    if result.n_rejected_interference:
+        print(f"\n({result.n_rejected_interference} better-ranked window(s) dropped: a target's "
+              f"interference above interference_max.)")
     if result.n_rejected_saturated:
-        print(f"\n({result.n_rejected_saturated} better-ranked window(s) dropped: total I/I0 somewhere in "
+        print(f"({result.n_rejected_saturated} better-ranked window(s) dropped: total I/I0 somewhere in "
               f"the window below window_transmission_min -- saturated.)")
 
     print("\n=== Per-window detail: selected peaks, temperature sensitivity, interferers ===")
@@ -101,7 +109,7 @@ def _print_window_detail(i: int, c, names: list) -> None:
             print(f"    {'':<14}! its alpha is {ratio:.1f}x higher at {c.window_max_position[n]:.4f} "
                   f"({_why_not_max(c, n)})")
     for pair, coeff in c.ratio_temperature_coeff.items():
-        print(f"    ratio {pair}: T coeff {coeff:+.3f} %/K")
+        print(f"    ratio {pair}: T coeff {coeff:+.3f} %/K  {_ratio_error_str(c, pair)}")
     if c.interferers:
         top = " | ".join(
             f"{r.label} {r.peak_alpha:.1e} @{r.peak_position:.3f} (I/I0 {r.transmission:.4f})"
@@ -112,9 +120,18 @@ def _print_window_detail(i: int, c, names: list) -> None:
 
 _NOT_MAX_REASON = {  # CombinedWindowResult.peak_note -> text
     "edge": "wing of a line outside the window",
+    "range": "taller peak inside, not used: it absorbs outside the target range",
     "separation": "taller peak inside, not used: too close to another target",
     "width": "taller peak inside, not used: its width can't be measured in this window",
 }
+
+
+def _ratio_error_str(c, pair: str) -> str:
+    """'-> 0.32 permil for the cell's T stability' (+ '!' if above the target precision)."""
+    err = c.ratio_temperature_error.get(pair)
+    if err is None:
+        return ""
+    return f"-> {1e3 * err:.2g} permil at the cell's T stability" + ("" if c.ratio_temperature_ok[pair] else "  !")
 
 
 def _why_not_max(c, n: str) -> str:
@@ -282,7 +299,9 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
         txt(cols[6], c.main_interferer.get(n) or "-")
         y -= line_h
     for pair, coeff in c.ratio_temperature_coeff.items():
-        txt(0.06, f"ratio {pair}: T coeff {coeff:+.3f} %/K")
+        ok = c.ratio_temperature_ok.get(pair, True)
+        txt(0.06, f"ratio {pair}: T coeff {coeff:+.3f} %/K  {_ratio_error_str(c, pair)}",
+            color="black" if ok else _RED, bold=not ok)
         y -= line_h
     txt(0.06, f"lowest total I/I0 in the window (all species): {c.window_min_transmission:.3f} "
               f"at {c.window_min_position:.4f}")

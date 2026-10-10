@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from math import log, sqrt
 
+import numpy as np
+
 from hapi import EnvironmentDependency_Gamma0, cBolts, cc, molecularMass
 
 from .constants import P_REF, T_REF
@@ -41,6 +43,17 @@ def lorentz_fwhm(gamma_air: float, gamma_self: float, n_air: float,
     return 2 * hwhm
 
 
-def voigt_fwhm(fwhm_lorentz: float, fwhm_gauss: float) -> float:
-    """Olivero & Longbothum (1977) pseudo-Voigt FWHM approximation (~0.02% accurate)."""
-    return 0.5346 * fwhm_lorentz + sqrt(0.2166 * fwhm_lorentz**2 + fwhm_gauss**2)
+def voigt_fwhm(fwhm_lorentz, fwhm_gauss):
+    """Olivero & Longbothum (1977) pseudo-Voigt FWHM approximation (~0.02% accurate).
+    Works on scalars or numpy arrays."""
+    return 0.5346 * fwhm_lorentz + np.sqrt(0.2166 * fwhm_lorentz**2 + fwhm_gauss**2)  # arrays OK
+
+
+def voigt_peak_height(fwhm_lorentz, fwhm_gauss):
+    """Peak value (cm) of the area-normalised Voigt profile, pseudo-Voigt approximation
+    (Ida, Ando & Toraya 2000 mixing) -- within ~1%, enough to ESTIMATE a line's peak
+    absorption from its intensity before computing any spectrum. Scalars or arrays."""
+    f_v = voigt_fwhm(fwhm_lorentz, fwhm_gauss)
+    r = fwhm_lorentz / f_v
+    eta = 1.36603 * r - 0.47719 * r**2 + 0.11116 * r**3
+    return eta * 2 / (np.pi * f_v) + (1 - eta) * 2 * np.sqrt(log(2) / np.pi) / f_v
