@@ -20,6 +20,7 @@ import contextlib
 import copy
 import io
 import json
+import os
 from pathlib import Path
 
 import hapi
@@ -30,6 +31,9 @@ from .species import NAME_TO_ID, _ALIASES, global_isotopologue_ids
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 _FETCH_DIR = DATA_DIR / "_fetch"
+# Server mode: never download, only use what's already cached (the public web app ships a
+# prefilled data/ -- see prefetch.py); a range the cache doesn't cover is a ValueError.
+OFFLINE = os.environ.get("HITRAN_OFFLINE", "") not in ("", "0")
 _HAPI_STARTED = False
 _FETCHED_RANGE = {}  # {table: (lo, hi)} -- coverage of what's loaded in hapi.LOCAL_TABLE_CACHE
 
@@ -125,6 +129,10 @@ def ensure_lines(molecule: str, sigma_min: float, sigma_max: float) -> str:
 
     lo_hi = _FETCHED_RANGE.get(table)
     if lo_hi is None or lo_hi[0] > sigma_min or lo_hi[1] < sigma_max:
+        if OFFLINE:
+            have = f"{lo_hi[0]:g}-{lo_hi[1]:g} cm^-1" if lo_hi else "none"
+            raise ValueError(f"no {molecule} lines cached for {sigma_min:g}-{sigma_max:g} cm^-1 "
+                             f"(cached: {have}) and downloads are off (HITRAN_OFFLINE)")
         new_lo = min(sigma_min, lo_hi[0]) if lo_hi else sigma_min
         new_hi = max(sigma_max, lo_hi[1]) if lo_hi else sigma_max
         print(f"  fetching {molecule} lines (all isotopologues) {new_lo:g}-{new_hi:g} cm^-1 from HITRANonline...")

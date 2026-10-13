@@ -19,6 +19,18 @@ uv sync
 uv run run.py
 ```
 
+Or, with a graphical interface in the browser:
+
+```
+uv run streamlit run app.py
+```
+
+`app.py` runs the same search with every parameter set from the page (gases and
+isotopes, instrument as L or ringdown time, pressure, temperature, scan width,
+search range, criteria), then shows the ranked windows, an interactive spectrum
+of each one and a CSV download. The default case is SubOcean around its window
+(a few seconds).
+
 Edit the parameters at the top of `run.py` to change what it searches: target
 species/concentrations, search range, and the instrument's real numbers
 (`L_cm` -- path length, `delta_sigma` -- laser scan range, `P` -- cell
@@ -31,8 +43,9 @@ when the targets' concentrations are within a few orders of magnitude of
 each other -- mixing ppm-level trace gases with e.g. 30% H2O only works if
 the path length is long enough for the trace gases without saturating H2O
 (see the validation case below, which does exactly this). Background gases
-(`atm_standard.csv`) are checked as interferers in every final window, but
-never used to filter or rank -- if a species must be *detected*, it goes in
+(`atm_standard.csv`) are checked as interferers in every final window: by
+default a window is dropped if any target's interference exceeds 5%
+(`interference_max`) -- if a species must be *detected*, it goes in
 `targets`.
 
 Outputs, per window: the ranked console table, a per-window detail block
@@ -55,17 +68,22 @@ plausible answer. So the search runs in two passes:
   computes the real absorption spectrum -- but just over that candidate's
   own tiny window (`delta_sigma`, e.g. 0.3-0.4 cm^-1, a DFB laser's
   current-scan range), which is cheap precisely because the range is tiny.
-  Takes alpha **at each target's selected line** (the line the window was
-  picked for -- not the window's max, which can be a wing from a strong line
-  just outside; that case is flagged), converts to transmission
-  `I/I0 = exp(-alpha*L_cm)` at the instrument's real path length and flags
-  whether that's in the acceptable range. If the real spectrum shows another
-  of a species' lines in the window standing taller than the Stage-1 pick,
-  that line becomes the selected one (if separation still holds).
-- **Saturation filter** (a hard filter): the total transmission across the
-  whole scanned window (targets + all interferers) must stay >=
-  `window_transmission_min` (default 0.5) -- rejects e.g. windows sitting on
-  the wing of a saturated HDO line.
+  Each target is represented by a **top of its real curve** in the window
+  (refined between grid points, width measured at half height on the curve)
+  -- not by a HITRAN line position: when two of its lines overlap, the top is
+  between them. Which top: the one whose absorption best fits the target
+  range (the tallest among equally good ones; `pick_lines_for_range`) -- at
+  high concentration the strongest line saturates while weaker ones are
+  usable. Stage 1 already picks each gas's line the same way, from an
+  estimated peak absorption. A max at the window's edge (wing of a line
+  outside) is never selected, only flagged. Converts that peak to
+  transmission `I/I0 = exp(-alpha*L_cm)` at the instrument's real path length
+  and flags whether that's in the acceptable range.
+- **Interference filter** (default): walking the ranked list, a window is
+  dropped if any target's interference (below) exceeds `interference_max`.
+- **Saturation filter** (optional, off by default): the total transmission
+  across the whole scanned window (targets + all interferers) must stay >=
+  `window_transmission_min`; the lowest value is always reported.
 - **Diagnostics** (final windows only, reported, not ranked on):
   - *Interferers* (`interference.py`): every background molecule of
     `atm_standard.csv` at its standard concentration, each isotopologue
@@ -76,7 +94,9 @@ plausible answer. So the search runs in two passes:
   - *Temperature* (`temperature.py`): alpha at the selected line at T, T+1,
     ..., T+5 K (constant P, so number density drops with T too), headline
     coefficient `(alpha(T+1) - alpha(T)) / alpha(T)` in %/K; for two
-    isotopologues of one molecule, the same for their ratio.
+    isotopologues of one molecule, the same for their ratio (= the difference
+    of their two coefficients, to first order), flagged when it exceeds
+    `ratio_precision` (1 permil) for the cell's `temperature_stability_K`.
 
 ## Structure
 
@@ -95,6 +115,38 @@ plausible answer. So the search runs in two passes:
 - `hitran_tool/report.py` -- text table + per-window detail, CSV export, per-window zoomed plots
   (selected line of each target circled and labelled, strongest interferers overlaid).
 - `atm_standard.csv` -- standard atmospheric mole fractions used as background interferers.
+- `app.py` -- Streamlit interface (`uv run streamlit run app.py`).
+- `hitran_tool/worker.py` -- runs one search in a separate process (the app's process pool).
+- `prefetch.py` -- fills `data/` with every molecule over 2000-9000 cm^-1, for the Docker image.
+
+## Deployment (public web app)
+
+The app is shipped as a Docker image (`Dockerfile`) that never contacts HITRAN: it runs with
+`HITRAN_OFFLINE=1` and only uses the line lists copied into the image, so a search outside
+2000-9000 cm^-1 is refused with a message instead of starting a multi-minute download.
+
+```
+uv run prefetch.py                 # once: every molecule of the menu, 2000-9000 cm^-1 (~410 MB)
+docker build -t hitran-spectro .
+docker run -p 8501:8501 hitran-spectro
+```
+
+then http://localhost:8501 (health check: `/_stcore/health`). The image is built from a local
+checkout because `data/` isn't in git.
+
+- **Parallel searches.** HAPI keeps its state in globals, so concurrent searches in one
+  process would overwrite each other's tables. Each search runs in its own worker process
+  (`hitran_tool/worker.py`), at most `MAX_PARALLEL_SEARCHES` at once (default 2, set with
+  `docker run -e`); further searches wait in line. Identical searches are served from
+  Streamlit's cache without recomputing. Sizing: ~0.5 GB RAM and one CPU core per worker,
+  plus the server itself (~70 MB idle, more with many visitors and cached results); a search takes ~10 s on a 7 cm^-1 range, ~2 min on
+  the full 2000-9000 cm^-1.
+- **`app.py` runs the page inside `main()`**, under `if __name__ == "__main__"`: worker
+  processes are started with `spawn`, which re-imports the main script, and must not run the
+  page.
+- **Dependencies** are pinned in `uv.lock`. This project sits in a uv workspace on the
+  author's machine, so a plain `uv lock` here updates the workspace's lock, not this one:
+  regenerate it from a copy of `pyproject.toml` + `README.md` outside the workspace.
 
 ## Inputs (`TargetSpecies` + `SearchConfig`)
 
@@ -121,14 +173,27 @@ plausible answer. So the search runs in two passes:
 - `delta_sigma`: window width (cm^-1), a real hardware constraint (e.g. a DFB laser's current-tuning
   range), default 0.35 -- NOT auto-derived.
 - `n_separation`: required gap between every PAIR of targets, in units of the larger of the two lines' Voigt FWHM -- a hard filter.
-- `window_transmission_min`: saturation filter on the total I/I0 anywhere in the window (default 0.5).
-- `transmission_min`/`transmission_max`: acceptable `I/I0 = exp(-alpha*L_cm)` range (default 0.05-0.20)
+- `window_transmission_min`: optional saturation filter on the total I/I0 anywhere in the window
+  (default 0 = off).
+- `transmission_min`/`transmission_max`: acceptable `I/I0 = exp(-alpha*L_cm)` range (default 0.80-0.95, i.e. 5-20% attenuation)
   -- flags `CombinedWindowResult.transmission_ok` per species, reported in the output but NOT
   filtered on (so a run always returns its best candidates, even when none reach this range).
+- `spectrum_snr`/`snr_min`: detection limit. If `spectrum_snr` is set, the weakest acceptable
+  absorption is `snr_min / spectrum_snr` (same rule for every species) and replaces
+  `transmission_max` -- `run.py` uses 1000 and 10, i.e. 1%.
+- `pick_lines_for_range` (default True): pick each gas's line/peak by fit to the absorption range
+  rather than by strength (False = strongest line, the original trace-gas behaviour).
+- `rank_by_interference` (`filter` | `none` | `tiebreak` | `score`, default `filter`),
+  `interference_max` (default 5%), `interference_weight`: how interference enters the selection
+  -- see `SearchConfig` in `windows.py`. `filter` uses the full reported interference (background
+  CSV included); `tiebreak`/`score` need it for every candidate, so they use the other targets and
+  the targets' isotopologues only.
+- `temperature_stability_K` (default 0.1 K), `ratio_precision` (default 1e-3): flag for the isotope
+  ratio T sensitivity.
 - `max_windows`: how many ranked windows to return.
 - `max_stage1_candidates`: cap on how many Stage-1 candidates get the expensive Stage-2 treatment (default 200).
-- `wavenumber_step`: stage-2 grid step (default 0.002 cm^-1) -- only shapes the plotted curves, alpha at
-  each selected line is exact (line centers are added to the grid).
+- `wavenumber_step`: stage-2 grid step (default 0.002 cm^-1) -- peak tops are refined between grid
+  points (checked against a 2e-5 cm^-1 grid: within 0.02%), so it mostly shapes the plotted curves.
 - `temperature_step_K`/`temperature_steps`: T sweep for the sensitivity check (default +1 K x 5).
 
 ## Key physics/unit points (see module docstrings for detail)
@@ -162,31 +227,68 @@ filtered), isotopologues as separate targets, background + isotopologue
 interference check and temperature sensitivity per window (both reported,
 not ranked on), per-window plots with each target's selected line marked.
 
-Deliberately deferred: ranking/filtering on interference or T sensitivity,
-P sensitivity.
+Deliberately deferred: ranking on interference or T sensitivity (only the
+saturation filter uses the interferers), T sensitivity of the interference
+itself, P sensitivity.
 
 ## Known limitations to revisit
 
-- Ranking score doesn't account for transmission fit -- a window can score
-  well on raw peak strength while every species is outside the acceptable
-  transmission range (see the validation case: the best-positioned window
-  ranks #3, not #1, for exactly this reason).
 - `P` (cell/cavity pressure) has a first-order effect on whether anything can
   be found at all: at 1 atm, collisional broadening widens lines enough that
-  3 species can't fit pairwise-separated inside a 0.35 cm^-1 window. Reduced-
-  pressure operation (as real OF-CEAS/CRDS instruments use) is required; the
-  exact value in `run.py` is still a placeholder.
+  3 species can't fit pairwise-separated inside a 0.35 cm^-1 window. `run.py`
+  uses 30 mbar, the confirmed SubOcean value.
+- Stage 1 only knows the targets: it can propose windows next to a strong
+  line of a non-target (e.g. HDO at 30% H2O). The saturation filter removes
+  the worst ones afterwards, but the search itself isn't steered away.
+- The saturation filter also applies to the targets' own lines: a target
+  absorbing more than 50% (I/I0 < 0.5) removes the window, even though the
+  per-target transmission range is otherwise only flagged.
+- Isotopologue pairs: the ranking prefers each species' strongest line, so
+  a minor isotopologue (e.g. 13CH4, ~1%) ends up ~100x weaker than the main
+  one -- nothing yet looks for pairs of lines with comparable absorption.
 - Interferers are reported, not used in the search: a window badly
   overlapped by e.g. CO2 still ranks as high as a clean one.
 - Lines are only included within 5 cm^-1 around a window: a window at the
   very edge of `[sigma_min, sigma_max]` misses wings from lines beyond it.
 
+## Which change matters? (`compare_variants.py`)
+
+`uv run compare_variants.py` reruns the validation case adding this project's
+changes one at a time (and the interference-ranking options), and prints which
+windows enter/leave the top 10 at each step -- see its docstring. Results in
+`results/variants*.csv`.
+
 ## Validation
 
 The project's reference case (from the supervisor): CH4 (10 ppm), N2O (1 ppm),
-H2O (30%), `L_cm` = 7.5 km (`c * 25 us` ringdown lifetime, an OF-CEAS cavity).
-Searching blindly over 2000-9000 cm^-1 (no hint about where to look), the tool
-finds a window at **4401.09 cm^-1 (2.27216 um)** -- within 0.04% of the
-supervisor's stated ~2.273 um answer. At that window, H2O's transmission is
-in the acceptable range; CH4 and N2O are not yet (too weak at the current
-placeholder pressure) -- see Known limitations.
+H2O (30%), `L_cm` = 7.5 km (`c * 25 us` ringdown lifetime, an OF-CEAS cavity),
+P = 30 mbar, T = 40 C, `delta_sigma` = 0.55 cm^-1, detection limit 1%
+(SNR 10 on a spectrum SNR of 1000), interference filter at 5%.
+
+- Searching blindly over 2000-9000 cm^-1, all top-10 windows have the three
+  gases in range; the real SubOcean window (4398.15 cm^-1, inside the window
+  found at 4398.00) is #7.
+- Searching only the tuning range of the SubOcean DFB laser (7 cm^-1 around
+  4398.15), it's #1 -- see `studies/subocean_high_ch4.py`.
+
+## Studies (`studies/`)
+
+- `subocean_high_ch4.py`: same instrument, CH4 at 10 / 1000 / 10000 ppm within
+  the DFB's 7 cm^-1. At 10 ppm the SubOcean window is #1. At 1000 ppm and
+  above no window passes: CH4 itself is measurable (weaker lines, I/I0
+  0.83-0.94), but CH4 and 13CH4 absorb under every N2O and H2O peak
+  (interference >= ~60% in the best window, often >1000%; still >= 28% on
+  H2O even without N2O as a target).
+- `swis_water_isotopes.py`: SWIS, H2(16)O + H2(18)O + HDO in 100% water vapour,
+  L = 4.5 km (15 us ring-down), everything else SubOcean's, at 30 / 10 / 5 mbar
+  (SWIS's pressure isn't known yet). At 30 mbar no window passes: the
+  pressure-broadened H2(16)O wings put HDO and H2(18)O over 5% interference.
+  At 10 mbar 2 windows pass, at 5 mbar 5; the best is 4175.1 cm^-1 (all three
+  at 8-15% absorption, interference <= 1.5%), but its isotope ratios move by
+  2-3 permil per 0.1 K. The counts at 10 and 5 mbar depend on
+  `max_stage1_candidates` (2000 instead of 200: 5 mbar -> 10 windows, 10 mbar
+  -> 5, none with all three in range, the two above being replaced by
+  neighbouring candidates in the stage-1 dedup); 30 mbar stays at 0. Figures:
+  `uv run docs/make_study_figures.py` -> `docs/study_a.png`, `docs/study_a_ch4.png`
+  (the SubOcean window at the three CH4 levels), `docs/study_b.png`,
+  `docs/study_b_pressure.png` (the 4175.1 window at the three pressures).
