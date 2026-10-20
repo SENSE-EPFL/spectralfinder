@@ -2,11 +2,7 @@
 .venv
 **/__pycache__
 .DS_Store
-# only data/*.lines.npz goes in the image (HAPI's raw .data/.header are an older cache format)
-data/*.data
-data/*.header
-data/*.fetched_range.json
-data/_fetch
+data
 results
 window_details
 studies

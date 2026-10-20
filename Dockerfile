@@ -1,9 +1,7 @@
-# Public web app (app.py). Build from a checkout whose data/ is filled -- `uv run prefetch.py`
-# first: the container never downloads from HITRAN (HITRAN_OFFLINE=1), it only uses the
-# line lists copied in below.
+# Public web app (app.py). On start the container fetches the line lists it lacks into
+# data/ (prefetch.py), then serves; mount a volume there so the fetch happens once.
 #
-#   docker build -t hitran-spectro .
-#   docker run -p 8501:8501 hitran-spectro        -> http://localhost:8501
+#   docker compose up        -> http://localhost:8501 (see compose.yaml)
 
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim
 
@@ -14,13 +12,11 @@ WORKDIR /app
 COPY pyproject.toml uv.lock README.md ./
 RUN uv sync --locked --no-install-project --no-dev
 
-RUN useradd --create-home app
-# line lists (~400 MB): before the code, so a code change doesn't recopy them
-COPY --chown=app data/*.lines.npz data/
-COPY --chown=app atm_standard.csv app.py ./
+RUN useradd --create-home --uid 1000 app
+COPY --chown=app atm_standard.csv app.py prefetch.py ./
 COPY --chown=app .streamlit/ .streamlit/
 COPY --chown=app hitran_tool/ hitran_tool/
-RUN chown app /app/data
+RUN mkdir data && chown app data
 
 USER app
 ENV PATH="/app/.venv/bin:$PATH" \
@@ -28,7 +24,7 @@ ENV PATH="/app/.venv/bin:$PATH" \
     MAX_PARALLEL_SEARCHES=2 \
     PYTHONUNBUFFERED=1
 EXPOSE 8501
-HEALTHCHECK --interval=30s --timeout=5s \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15m \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
-CMD ["streamlit", "run", "app.py", "--server.address=0.0.0.0", "--server.port=8501", \
-     "--server.headless=true", "--browser.gatherUsageStats=false"]
+CMD ["sh", "-c", "HITRAN_OFFLINE=0 python prefetch.py && exec streamlit run app.py \
+     --server.address=0.0.0.0 --server.port=8501 --server.headless=true --browser.gatherUsageStats=false"]
