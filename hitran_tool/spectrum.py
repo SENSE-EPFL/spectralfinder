@@ -16,10 +16,11 @@ a 10 ppm gas).
 from __future__ import annotations
 
 import contextlib
+import functools
 import io
 
 import numpy as np
-from hapi import absorptionCoefficient_Voigt
+from hapi import PYTIPS, absorptionCoefficient_Voigt
 from hapi import volumeConcentration as _volume_concentration
 
 from .lines import SLICE_MARGIN, sliced_table
@@ -31,6 +32,12 @@ def number_density(P: float, T: float) -> float:
     reimplemented, since absorption_coefficient() below relies on this exact
     same quantity internally (through HITRAN_units=False)."""
     return _volume_concentration(P, T)
+
+
+@functools.lru_cache(maxsize=None)
+def _partition_sum(molec_id: int, iso_id: int, T: float) -> float:
+    """HAPI recomputes this for every line; it only depends on its arguments."""
+    return PYTIPS(molec_id, iso_id, T)
 
 
 def window_grid(lo: float, hi: float, step: float, extra_points=()) -> np.ndarray:
@@ -82,6 +89,7 @@ def absorption_coefficient(table: str, molec_id: int, iso_id: int, mole_fraction
             WavenumberWing=SLICE_MARGIN,
             IntensityThreshold=s_cutoff,
             HITRAN_units=False,
+            partitionFunction=lambda M, I, T: _partition_sum(int(M), int(I), float(T)),
         )
     return np.asarray(xsect_times_ntotal) * mole_fraction
 

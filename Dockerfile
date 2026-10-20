@@ -14,7 +14,7 @@ RUN uv sync --locked --no-install-project --no-dev
 
 RUN useradd --create-home --uid 1000 app
 COPY --chown=app atm_standard.csv app.py prefetch.py ./
-COPY --chown=app .streamlit/ .streamlit/
+COPY --chown=app assets/ assets/
 COPY --chown=app hitran_tool/ hitran_tool/
 RUN mkdir data && chown app data
 
@@ -25,6 +25,6 @@ ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1
 EXPOSE 8501
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15m \
-    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"
-CMD ["sh", "-c", "HITRAN_OFFLINE=0 python prefetch.py && exec streamlit run app.py \
-     --server.address=0.0.0.0 --server.port=8501 --server.headless=true --browser.gatherUsageStats=false"]
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8501/health')"
+CMD ["sh", "-c", "HITRAN_OFFLINE=0 python prefetch.py && exec gunicorn --workers 1 --threads 16 \
+     --bind 0.0.0.0:8501 app:server"]

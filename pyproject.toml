@@ -8,6 +8,8 @@ dependencies = [
     "hitran-api>=1.3.0.0",
     "numpy>=2.0",
     "matplotlib>=3.9",
-    "streamlit>=1.65.0",
     "plotly>=7.1.0",
+    "dash>=4.4.1",
+    "gunicorn>=26.2.0",
+    "pandas>=3.0.6",
 ]

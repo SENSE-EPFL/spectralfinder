@@ -22,7 +22,7 @@ uv run run.py
 Or, with a graphical interface in the browser:
 
 ```
-uv run streamlit run app.py
+uv run app.py
 ```
 
 `app.py` runs the same search with every parameter set from the page (gases and
@@ -115,7 +115,7 @@ plausible answer. So the search runs in two passes:
 - `hitran_tool/report.py` -- text table + per-window detail, CSV export, per-window zoomed plots
   (selected line of each target circled and labelled, strongest interferers overlaid).
 - `atm_standard.csv` -- standard atmospheric mole fractions used as background interferers.
-- `app.py` -- Streamlit interface (`uv run streamlit run app.py`).
+- `app.py` -- Dash interface (`uv run app.py`).
 - `hitran_tool/worker.py` -- runs one search in a separate process (the app's process pool).
 - `prefetch.py` -- fills `data/` with every molecule over 2000-9000 cm^-1, for the Docker image.
 
@@ -131,19 +131,19 @@ docker build -t hitran-spectro .
 docker run -p 8501:8501 hitran-spectro
 ```
 
-then http://localhost:8501 (health check: `/_stcore/health`). The image is built from a local
+then http://localhost:8501 (health check: `/health`). The image is built from a local
 checkout because `data/` isn't in git.
 
 - **Parallel searches.** HAPI keeps its state in globals, so concurrent searches in one
   process would overwrite each other's tables. Each search runs in its own worker process
   (`hitran_tool/worker.py`), at most `MAX_PARALLEL_SEARCHES` at once (default 2, set with
   `docker run -e`); further searches wait in line. Identical searches are served from
-  Streamlit's cache without recomputing. Sizing: ~0.5 GB RAM and one CPU core per worker,
+  the app's cache without recomputing. Sizing: ~0.5 GB RAM and one CPU core per worker,
   plus the server itself (~70 MB idle, more with many visitors and cached results); a search takes ~10 s on a 7 cm^-1 range, ~2 min on
   the full 2000-9000 cm^-1.
-- **`app.py` runs the page inside `main()`**, under `if __name__ == "__main__"`: worker
-  processes are started with `spawn`, which re-imports the main script, and must not run the
-  page.
+- **`app.py` starts the server only under `if __name__ == "__main__"`**: worker
+  processes are started with `spawn`, which re-imports the main script, and must not start
+  the server.
 - **Dependencies** are pinned in `uv.lock`. This project sits in a uv workspace on the
   author's machine, so a plain `uv lock` here updates the workspace's lock, not this one:
   regenerate it from a copy of `pyproject.toml` + `README.md` outside the workspace.

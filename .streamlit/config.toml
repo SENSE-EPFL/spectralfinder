@@ -1,4 +1,0 @@
-[client]
-# no "Deploy" button / developer menu for visitors
-toolbarMode = "minimal"
-showErrorDetails = "none"
