@@ -57,15 +57,24 @@ INK_LIGHT = dict(primary="#0b0b0b", secondary="#52514e", muted="#898781", grid="
                  surface="#fcfcfb")
 INK_DARK = dict(primary="#f0efec", secondary="#c3c2b7", muted="#898781", grid="#2c2c2a", axis="#383835",
                 surface="#1a1a19")
-RED = {"color": "var(--critical)", "fontWeight": 600}  # out of range: the status color, never a series
+RED = {"color": "var(--sf-critical)", "fontWeight": 600}  # out of range: the status color, never a series
 # Table colors as props, not CSS: Dash's own table CSS outranks a stylesheet, and these inline
 # styles still give way to style_data_conditional (red values, the selected row). Borders are
 # in style.css: Dash merges a border prop badly with the per-column alignment.
 TABLE_COLORS = dict(
-    style_header={"backgroundColor": "var(--surface-2)", "color": "var(--text-2)", "fontWeight": 600},
-    style_data={"backgroundColor": "var(--surface)", "color": "var(--text)"},
+    style_header={"backgroundColor": "var(--sf-surface-2)", "color": "var(--sf-text-2)", "fontWeight": 600},
+    style_data={"backgroundColor": "var(--sf-surface)", "color": "var(--sf-text)"},
     style_cell={"textAlign": "left"},  # right-aligned, a dropdown's arrow covered the value
 )
+# Editable tables: rows and dropdown columns big enough to hit and read. No scrolling container
+# (overflow visible): one would cut off the open dropdown list.
+INPUT_TABLE = dict(TABLE_COLORS, style_table={"overflow": "visible"},
+                   style_cell={"textAlign": "left", "height": "2.4rem", "padding": "0 6px"},
+                   style_header={**TABLE_COLORS["style_header"], "whiteSpace": "normal", "height": "auto"},
+                   style_cell_conditional=[{"if": {"column_id": "molecule"}, "minWidth": "6.5rem"},
+                                           {"if": {"column_id": "unit"}, "minWidth": "4.5rem"},
+                                           {"if": {"column_id": "concentration"}, "width": "4.5rem"},
+                                           {"if": {"column_id": "isotope"}, "width": "3.5rem"}])
 # Result tables: text left, numbers right (aligned digits, see style.css)
 RESULT_TABLE = dict(TABLE_COLORS, style_table={"overflowX": "auto"},
                     style_cell={"textAlign": "left", "padding": "6px 12px", "fontFamily": "inherit",
@@ -301,8 +310,8 @@ app.layout = html.Div([
                     ]).to_dict("records"),
                     editable=True, row_deletable=True, id="gases",
                     columns=[
-                        {"name": "molecule", "id": "molecule", "presentation": "dropdown"},
-                        {"name": "concentration", "id": "concentration", "type": "numeric"},
+                        {"name": "gas", "id": "molecule", "presentation": "dropdown"},
+                        {"name": "amount", "id": "concentration", "type": "numeric"},
                         {"name": "unit", "id": "unit", "presentation": "dropdown"},
                         {"name": "isotope", "id": "isotope", "type": "numeric"},
                     ],
@@ -312,7 +321,7 @@ app.layout = html.Div([
                         "unit": {"options": [{"label": u, "value": u} for u in UNITS], "clearable": False},
                     },
                     tooltip_header={"isotope": "1 = main isotopologue; e.g. CH4: 2 = ¹³CH4, H2O: 4 = HDO"},
-                    style_table={"overflowX": "auto"}, **TABLE_COLORS,
+                    **INPUT_TABLE,
                 ),
                 html.Button("+ Add gas", id="add", className="ghost"),
             ], className="group"),
@@ -355,8 +364,8 @@ app.layout = html.Div([
             dash_table.DataTable(
                 background_rows(STANDARD_BACKGROUND), id="background", editable=True, row_deletable=True,
                 columns=[
-                    {"name": "molecule", "id": "molecule", "presentation": "dropdown"},
-                    {"name": "concentration", "id": "concentration", "type": "numeric"},
+                    {"name": "gas", "id": "molecule", "presentation": "dropdown"},
+                    {"name": "amount", "id": "concentration", "type": "numeric"},
                     {"name": "unit", "id": "unit", "presentation": "dropdown"},
                 ],
                 dropdown={
@@ -364,7 +373,7 @@ app.layout = html.Div([
                                  "clearable": False},
                     "unit": {"options": [{"label": u, "value": u} for u in BACKGROUND_UNITS], "clearable": False},
                 },
-                style_table={"maxHeight": "22rem", "overflowY": "auto"}, **TABLE_COLORS,
+                **INPUT_TABLE,
             ),
             html.Div([html.Button("+ Add gas", id="add-background", className="ghost"),
                       html.Button("Reset to standard", id="reset-background", className="ghost")],
@@ -397,14 +406,23 @@ app.layout = html.Div([
                 ], className="actions"),
             ], className="section-head"),
             html.Div(id="summary"),
+            # one window at a time (best first); the others one click away, or all of them compared
+            # in a collapsed table
             html.Div([
-                dash_table.DataTable(id="windows", data=[], columns=[], selected_rows=[0], **RESULT_TABLE),
-                html.P("Click a window to see its spectrum. Absorption of each gas at its peak; "
-                       "in red: outside the target range.", className="caption"),
-            ], id="windows-box"),
+                html.Button("‹ Previous", id="prev", className="secondary"),
+                html.Span(id="window-pos", className="window-pos"),
+                html.Button("Next ›", id="next", className="secondary"),
+                dcc.Dropdown(id="window-select", clearable=False, searchable=False, className="window-select"),
+            ], id="window-nav", className="window-nav"),
             html.Div(id="detail"),
+            html.Details([
+                html.Summary(id="compare-summary"),
+                dash_table.DataTable(id="windows", data=[], columns=[], selected_rows=[0], **RESULT_TABLE),
+                html.P("Click a row to show that window. Absorption of each gas at its peak; "
+                       "in red: outside the target range.", className="caption"),
+            ], id="windows-box", className="compare"),
         ], id="results-section", className="card", hidden=True),
-    ], type="dot", color="var(--accent)"),
+    ], type="dot", color="var(--sf-accent)"),
     footer(),
 ], className="page")
 
@@ -521,27 +539,48 @@ def numeric(col: str, decimals: int) -> dict:
     return {"name": col, "id": col, "type": "numeric", "format": Format(precision=decimals, scheme=Scheme.fixed)}
 
 
-@app.callback(Output("summary", "children"), Output("windows", "data"), Output("windows", "columns"),
-              Output("windows", "style_data_conditional"), Output("windows", "selected_rows"),
-              Output("windows-box", "hidden"), Output("detail", "children"), Output("results-section", "hidden"),
+RESULT_OUTPUTS = [  # what results() fills, in this order (see _empty())
+    ("summary", "children"), ("results-section", "hidden"), ("window-nav", "hidden"), ("windows-box", "hidden"),
+    ("window-pos", "children"), ("prev", "disabled"), ("next", "disabled"),
+    ("window-select", "options"), ("window-select", "value"), ("compare-summary", "children"),
+    ("windows", "data"), ("windows", "columns"), ("windows", "style_data_conditional"), ("windows", "selected_rows"),
+    ("detail", "children"),
+]
+
+
+def _empty(**values) -> dict:
+    """Every output of results() with nothing to show, overridden by `values` ({'id.prop': value})."""
+    out = {f"{c}.{p}": None for c, p in RESULT_OUTPUTS}
+    out.update({"summary.children": [], "results-section.hidden": True, "window-nav.hidden": True,
+                "windows-box.hidden": True, "window-pos.children": "", "prev.disabled": True,
+                "next.disabled": True, "window-select.options": [], "compare-summary.children": "",
+                "windows.data": [], "windows.columns": [], "windows.style_data_conditional": [],
+                "windows.selected_rows": [0], "detail.children": []})
+    out.update(values)
+    return out
+
+
+@app.callback([Output(c, p) for c, p in RESULT_OUTPUTS],
               # the clicked cell is cleared right away: the whole row is highlighted instead
               Output("windows", "active_cell"), Output("windows", "selected_cells"),
-              Input("run", "data"), Input("windows", "active_cell"), Input("dark", "value"),
+              Input("run", "data"), Input("windows", "active_cell"), Input("prev", "n_clicks"),
+              Input("next", "n_clicks"), Input("window-select", "value"), Input("dark", "value"),
               State("windows", "selected_rows"))
-def results(run, cell, dark, selected):
-    return _results(run, cell, dark, selected) + (None, [])
+def results(run, cell, _prev, _next, picked, dark, selected):
+    out = _results(run, cell, picked, dark, selected)
+    return [out[f"{c}.{p}"] for c, p in RESULT_OUTPUTS] + [None, []]
 
 
-def _results(run, cell, dark, selected) -> tuple:
+def _results(run, cell, picked, dark, selected) -> dict:
     if run is None:
-        return [], [], [], [], [0], True, [], True
+        return _empty()
 
     # the browser only keeps the search inputs (dcc.Store); the result comes back from run_search's
     # cache, or from the opened simulations
     r = load_run(run)
     if r is None:
-        return ([html.Div("This simulation is no longer in the server's memory: open the file again.",
-                          className="warning")], [], [], [], [0], True, [], False)
+        return _empty(**{"results-section.hidden": False, "summary.children": [html.Div(
+            "This simulation is no longer in the server's memory: open the file again.", className="warning")]})
     result, config = r["result"], r["config"]
     labels = [TargetSpecies(n, x, iso).label for n, x, iso in r["targets"]]
     palette = SERIES_DARK if dark else SERIES_LIGHT
@@ -551,7 +590,7 @@ def _results(run, cell, dark, selected) -> tuple:
     if r["source"]:  # the form above still shows its own values, not the file's
         summary.append(html.Div([html.B(f"Opened from {r['source']}"), f": {describe(r)}"], className="info"))
     n, dropped = len(result.windows), result.n_rejected_interference
-    stats = [html.Span([html.B(n), f" window{'s' * (n != 1)}"], className="stat")]
+    stats = [html.Span([html.B(n), f" window{'s' * (n != 1)} found"], className="stat")]
     if dropped:
         stats.append(html.Span([html.B(dropped), " dropped for interference"], className="stat"))
     if r["elapsed"] is not None and r["elapsed"] >= 1:
@@ -563,16 +602,14 @@ def _results(run, cell, dark, selected) -> tuple:
     if not result.windows:
         summary.append(html.Div("No window meets the criteria: try another spectral range or a higher "
                                 "interference limit.", className="warning"))
-        return summary, [], [], [], [0], True, [], False
+        return _empty(**{"summary.children": summary, "results-section.hidden": False})
 
-    # a new search goes back to the first window; a click selects the clicked one
-    if ctx.triggered_id == "run":
-        choice = 0
-    elif ctx.triggered_id == "windows" and cell:
-        choice = cell["row"]
-    else:
-        choice = (selected or [0])[0]
-    choice = min(choice, n - 1)
+    # a new search shows the best window; then the buttons, the menu or a row of the table
+    current = (selected or [0])[0]
+    choice = {"run": 0, "prev": current - 1, "next": current + 1,
+              "windows": cell["row"] if cell else current,
+              "window-select": picked if picked is not None else current}.get(ctx.triggered_id, current)
+    choice = max(0, min(choice, n - 1))
 
     rows, red = [], []
     for i, c in enumerate(result.windows):
@@ -585,10 +622,24 @@ def _results(run, cell, dark, selected) -> tuple:
         rows.append(row)
     columns = ([{"name": "#", "id": "#"}, numeric("center (cm⁻¹)", 3), numeric("λ (nm)", 2)]
                + [numeric(f"{g} (%)", 2) for g in labels] + [numeric("max. interference (%)", 2)])
-    styles = [{"if": {"row_index": choice}, "backgroundColor": "var(--selected)", "fontWeight": 600}] + red
+    styles = [{"if": {"row_index": choice}, "backgroundColor": "var(--sf-selected)", "fontWeight": 600}] + red
 
-    return (summary, rows, columns, styles, [choice], False,
-            window_detail(result, choice, labels, color, config, bool(dark)), False)
+    options = []
+    for i, c in enumerate(result.windows):
+        ok = sum(c.transmission_ok.values())
+        options.append({"label": f"#{i + 1} · {c.center:.3f} cm⁻¹ · {ok}/{len(labels)} gases in range",
+                        "value": i})
+    return _empty(**{
+        "summary.children": summary, "results-section.hidden": False,
+        "window-nav.hidden": n == 1, "windows-box.hidden": n == 1,
+        "window-pos.children": [html.B(f"Window {choice + 1}"), f" of {n}"],
+        "prev.disabled": choice == 0, "next.disabled": choice == n - 1,
+        "window-select.options": options, "window-select.value": choice,
+        "compare-summary.children": f"Compare all {n} windows",
+        "windows.data": rows, "windows.columns": columns, "windows.style_data_conditional": styles,
+        "windows.selected_rows": [choice],
+        "detail.children": window_detail(result, choice, labels, color, config, bool(dark)),
+    })
 
 
 def window_detail(result, choice: int, labels: list, color: dict, config, dark: bool) -> list:
@@ -630,8 +681,29 @@ def window_detail(result, choice: int, labels: list, color: dict, config, dark: 
                       paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=ink["surface"],
                       hoverlabel=dict(bgcolor=ink["surface"], font=dict(color=ink["primary"])))
 
-    detail = [html.H3(f"Window #{choice + 1} · {c.center:.3f} cm⁻¹ · {1e7 / c.center:.2f} nm",
-                      className="window-title"),
+    # the key numbers first: where the window is, how much each gas absorbs, the worst interference
+    lo_abs, hi_abs = 100 * (1 - config.transmission_max), 100 * (1 - config.transmission_min)
+    tiles = [html.Div([html.Span("Center", className="tile-label"),
+                       html.Span(f"{c.center:.3f} cm⁻¹", className="tile-value"),
+                       html.Span(f"{1e7 / c.center:.2f} nm", className="tile-note")], className="tile")]
+    for g in labels:
+        ok = c.transmission_ok[g]
+        tiles.append(html.Div([
+            html.Span([html.I(className="dot", style={"background": color[g]}), g], className="tile-label"),
+            html.Span(f"{100 * (1 - c.transmission[g]):.1f} %", className="tile-value" + ("" if ok else " bad")),
+            html.Span("absorption" if ok else f"⚠ outside {lo_abs:g}–{hi_abs:g} %",
+                      className="tile-note" + ("" if ok else " bad")),
+        ], className="tile"))
+    worst = max(c.interference, key=c.interference.get)
+    over = c.interference[worst] > config.interference_max
+    tiles.append(html.Div([
+        html.Span("Max. interference", className="tile-label"),
+        html.Span(f"{100 * c.interference[worst]:.1f} %", className="tile-value" + (" bad" if over else "")),
+        html.Span(f"on {worst}" + (f" ⚠ above {100 * config.interference_max:g} %" if over else ""),
+                  className="tile-note" + (" bad" if over else "")),
+    ], className="tile"))
+
+    detail = [html.Div(tiles, className="tiles"),
               dcc.Graph(figure=fig, config={"displaylogo": False, "responsive": True}, className="graph")]
 
     gas_rows, red = [], []

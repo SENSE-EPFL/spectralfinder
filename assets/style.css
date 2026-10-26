@@ -2,40 +2,42 @@
    setting on load) swaps them. Ink and surfaces match the chart's (app.py INK_LIGHT/DARK). */
 :root {
     color-scheme: light;
-    --page: #f6f6f3;
-    --surface: #ffffff;
-    --surface-2: #f3f3f0;
-    --text: #0b0b0b;
-    --text-2: #52514e;
-    --muted: #898781;
-    --border: rgba(11, 11, 11, 0.12);
-    --accent: #1c5cab;
-    --accent-hover: #184f95;
-    --accent-soft: rgba(42, 120, 214, 0.10);
-    --selected: rgba(42, 120, 214, 0.12);
-    --critical: #c22f2f;
-    --critical-soft: rgba(208, 59, 59, 0.10);
-    --warning-soft: rgba(250, 178, 25, 0.16);
-    --radius: 12px;
+    --sf-page: #f6f6f3;
+    --sf-surface: #ffffff;
+    --sf-surface-2: #f3f3f0;
+    --sf-text: #0b0b0b;
+    --sf-text-2: #52514e;
+    --sf-muted: #898781;
+    --sf-border: rgba(11, 11, 11, 0.12);
+    --sf-accent: #1c5cab;
+    --sf-accent-hover: #184f95;
+    --sf-accent-soft: rgba(42, 120, 214, 0.10);
+    --sf-selected: rgba(42, 120, 214, 0.12);
+    --sf-critical: #c22f2f;
+    --sf-critical-soft: rgba(208, 59, 59, 0.10);
+    --sf-warning-soft: rgba(250, 178, 25, 0.16);
+    --sf-cell-edit: #e8f0fb;  /* opaque: Dash paints white under a cell */
+    --sf-radius: 12px;
     --Dash-Fill-Interactive-Strong: #1c5cab;
 }
 
 html.dark {
     color-scheme: dark;
-    --page: #0d0d0d;
-    --surface: #1a1a19;
-    --surface-2: #232322;
-    --text: #f0efec;
-    --text-2: #c3c2b7;
-    --muted: #898781;
-    --border: rgba(255, 255, 255, 0.12);
-    --accent: #256abf;
-    --accent-hover: #2a78d6;
-    --accent-soft: rgba(57, 135, 229, 0.16);
-    --selected: rgba(57, 135, 229, 0.20);
-    --critical: #e66767;
-    --critical-soft: rgba(230, 103, 103, 0.14);
-    --warning-soft: rgba(250, 178, 25, 0.14);
+    --sf-page: #0d0d0d;
+    --sf-surface: #1a1a19;
+    --sf-surface-2: #232322;
+    --sf-text: #f0efec;
+    --sf-text-2: #c3c2b7;
+    --sf-muted: #898781;
+    --sf-border: rgba(255, 255, 255, 0.12);
+    --sf-accent: #256abf;
+    --sf-accent-hover: #2a78d6;
+    --sf-accent-soft: rgba(57, 135, 229, 0.16);
+    --sf-selected: rgba(57, 135, 229, 0.20);
+    --sf-critical: #e66767;
+    --sf-critical-soft: rgba(230, 103, 103, 0.14);
+    --sf-warning-soft: rgba(250, 178, 25, 0.14);
+    --sf-cell-edit: #1c2a3c;
     --Dash-Fill-Interactive-Strong: #3987e5;
     --Dash-Fill-Inverse-Strong: #232322;
     --Dash-Text-Strong: #f0efec;
@@ -50,8 +52,8 @@ html.dark {
 
 body {
     margin: 0;
-    background: var(--page);
-    color: var(--text);
+    background: var(--sf-page);
+    color: var(--sf-text);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     font-size: 15px;
     line-height: 1.45;
@@ -80,7 +82,7 @@ h1 {
 
 .tagline {
     margin: 0.25rem 0 0;
-    color: var(--text-2);
+    color: var(--sf-text-2);
 }
 
 h2 {
@@ -95,7 +97,7 @@ h3 {
     font-weight: 650;
     text-transform: uppercase;
     letter-spacing: 0.06em;
-    color: var(--text-2);
+    color: var(--sf-text-2);
 }
 
 .group > h3:first-child {
@@ -103,9 +105,9 @@ h3 {
 }
 
 .card {
-    background: var(--surface);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
+    background: var(--sf-surface);
+    border: 1px solid var(--sf-border);
+    border-radius: var(--sf-radius);
     padding: 1.5rem;
     margin-bottom: 1.5rem;
 }
@@ -146,7 +148,7 @@ h3 {
 .field-label {
     display: block;
     margin-bottom: 0.25rem;
-    color: var(--text-2);
+    color: var(--sf-text-2);
 }
 
 .check {
@@ -165,13 +167,13 @@ button.primary, button.secondary, button.ghost, .upload .secondary {
 button.primary {
     padding: 0.6rem 1.75rem;
     border: none;
-    background: var(--accent);
+    background: var(--sf-accent);
     color: #ffffff;
     font-weight: 600;
 }
 
 button.primary:hover {
-    background: var(--accent-hover);
+    background: var(--sf-accent-hover);
 }
 
 button.primary:disabled {
@@ -182,13 +184,13 @@ button.primary:disabled {
 button.secondary, .upload .secondary {
     display: inline-block;
     padding: 0.5rem 1rem;
-    border: 1px solid var(--border);
-    background: var(--surface);
-    color: var(--text);
+    border: 1px solid var(--sf-border);
+    background: var(--sf-surface);
+    color: var(--sf-text);
 }
 
 button.secondary:hover, .upload .secondary:hover {
-    background: var(--surface-2);
+    background: var(--sf-surface-2);
 }
 
 button.ghost {
@@ -196,7 +198,7 @@ button.ghost {
     padding: 0.3rem 0.6rem;
     border: none;
     background: none;
-    color: var(--accent);
+    color: var(--sf-accent);
     font-size: 0.875rem;
 }
 
@@ -205,7 +207,7 @@ html.dark button.ghost {
 }
 
 button.ghost:hover {
-    background: var(--accent-soft);
+    background: var(--sf-accent-soft);
 }
 
 .actions {
@@ -236,23 +238,23 @@ button.ghost:hover {
 }
 
 .error {
-    background: var(--critical-soft);
-    border-left: 3px solid var(--critical);
+    background: var(--sf-critical-soft);
+    border-left: 3px solid var(--sf-critical);
 }
 
 .warning {
-    background: var(--warning-soft);
+    background: var(--sf-warning-soft);
     border-left: 3px solid #fab219;
 }
 
 .info {
-    background: var(--accent-soft);
-    border-left: 3px solid var(--accent);
+    background: var(--sf-accent-soft);
+    border-left: 3px solid var(--sf-accent);
 }
 
 .caption {
     margin: 0.5rem 0 0;
-    color: var(--muted);
+    color: var(--sf-muted);
     font-size: 0.85rem;
 }
 
@@ -266,13 +268,107 @@ button.ghost:hover {
 .stat {
     padding: 0.3rem 0.75rem;
     border-radius: 999px;
-    background: var(--surface-2);
-    color: var(--text-2);
+    background: var(--sf-surface-2);
+    color: var(--sf-text-2);
     font-size: 0.875rem;
 }
 
 .stat b {
-    color: var(--text);
+    color: var(--sf-text);
+}
+
+/* ------------------------------------------------- one window at a time ---- */
+
+.window-nav {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.75rem 0;
+    border-top: 1px solid var(--sf-border);
+    border-bottom: 1px solid var(--sf-border);
+}
+
+.window-nav[hidden] {
+    display: none;
+}
+
+.window-pos {
+    min-width: 7.5rem;
+    text-align: center;
+}
+
+.window-nav button:disabled {
+    opacity: 0.4;
+    cursor: default;
+}
+
+.window-select {
+    flex: 1 1 18rem;
+    max-width: 26rem;
+    margin-left: auto;
+}
+
+.tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
+    gap: 0.75rem;
+    margin: 1.25rem 0 0.5rem;
+}
+
+.tile {
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+    padding: 0.75rem 1rem;
+    border-radius: 10px;
+    background: var(--sf-surface-2);
+}
+
+.tile-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    color: var(--sf-text-2);
+    font-size: 0.85rem;
+}
+
+.tile-value {
+    font-size: 1.35rem;
+    font-weight: 650;
+}
+
+.tile-note {
+    color: var(--sf-muted);
+    font-size: 0.8rem;
+}
+
+.tile .bad {
+    color: var(--sf-critical);
+}
+
+.dot {
+    display: inline-block;
+    width: 0.65rem;
+    height: 0.65rem;
+    border-radius: 50%;
+}
+
+.compare {
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--sf-border);
+}
+
+.compare[hidden] {
+    display: none;
+}
+
+.compare summary {
+    margin-bottom: 0.75rem;
+    cursor: pointer;
+    font-weight: 600;
+    color: var(--sf-text-2);
 }
 
 /* -------------------------------------------------- background gases ---- */
@@ -280,14 +376,14 @@ button.ghost:hover {
 .background-box {
     margin-top: 1.5rem;
     padding-top: 1rem;
-    border-top: 1px solid var(--border);
+    border-top: 1px solid var(--sf-border);
     font-size: 0.875rem;
 }
 
 .background-box summary {
     cursor: pointer;
     font-weight: 600;
-    color: var(--text-2);
+    color: var(--sf-text-2);
 }
 
 .background-box[open] summary {
@@ -304,7 +400,7 @@ button.ghost:hover {
 .dash-spreadsheet-inner th,
 .dash-spreadsheet-inner td {
     border: none !important;
-    border-bottom: 1px solid var(--border) !important;
+    border-bottom: 1px solid var(--sf-border) !important;
 }
 
 .dash-spreadsheet-inner td {
@@ -315,16 +411,65 @@ button.ghost:hover {
     color: inherit !important;
 }
 
-/* dropdowns inside the editable tables */
+/* the cell being edited: Dash's default is a pale red-orange fill, hard to read on */
+.dash-spreadsheet-inner td.cell--sf-selected,
+.dash-spreadsheet-inner td.focused {
+    background-color: var(--sf-cell-edit) !important;
+    box-shadow: inset 0 0 0 2px var(--sf-accent) !important;
+}
+
+.dash-spreadsheet-inner td input {
+    color: var(--sf-text) !important;
+    background: transparent !important;
+    caret-color: var(--sf-accent);
+}
+
+/* dropdowns inside the editable tables: big enough to hit and to read (WCAG 2.2 asks
+   >= 24 px targets); the open list floats above the table instead of blending into it */
 .dash-spreadsheet-inner .Select-control,
 .dash-spreadsheet-inner .Select-menu-outer,
 .dash-spreadsheet-inner .Select-option {
-    background-color: var(--surface) !important;
-    border-color: var(--border) !important;
+    background-color: var(--sf-surface) !important;
+    border-color: var(--sf-border) !important;
+}
+
+.dash-spreadsheet-inner .Select-control {
+    min-height: 2rem;
+    cursor: pointer;
+}
+
+.dash-spreadsheet-inner .Select-arrow {
+    border-color: var(--sf-text-2) transparent transparent !important;
+    border-width: 6px 5px 0 !important;
+}
+
+.dash-spreadsheet-inner .Select-menu-outer {
+    min-width: 11rem;
+    max-height: 18rem;
+    z-index: 1000;
+    border: 1px solid var(--sf-border) !important;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+    overflow: hidden;
+}
+
+.dash-spreadsheet-inner .Select-menu {
+    max-height: 18rem;
+}
+
+.dash-spreadsheet-inner .Select-option {
+    padding: 0.5rem 0.75rem !important;
+    font-size: 0.95rem;
+    color: var(--sf-text) !important;
 }
 
 .dash-spreadsheet-inner .Select-option.is-focused {
-    background-color: var(--surface-2) !important;
+    background-color: var(--sf-surface-2) !important;
+}
+
+.dash-spreadsheet-inner .Select-option.is-selected {
+    background-color: var(--sf-cell-edit) !important;
+    font-weight: 600;
 }
 
 #windows .dash-spreadsheet-inner td {
@@ -332,7 +477,7 @@ button.ghost:hover {
 }
 
 #windows .dash-spreadsheet-inner tr:hover td {
-    background-color: var(--surface-2) !important;
+    background-color: var(--sf-surface-2) !important;
 }
 
 .window-title {
@@ -340,7 +485,7 @@ button.ghost:hover {
     font-size: 1.05rem;
     text-transform: none;
     letter-spacing: 0;
-    color: var(--text);
+    color: var(--sf-text);
 }
 
 .graph {
@@ -352,7 +497,7 @@ button.ghost:hover {
 .footer {
     margin-top: 1rem;
     padding: 1rem 0 2rem;
-    color: var(--muted);
+    color: var(--sf-muted);
     font-size: 0.8rem;
 }
 
@@ -380,11 +525,11 @@ button.ghost:hover {
 
 @media (max-width: 600px) {
     .page {
-        padding: 1rem 1rem 0.5rem;
+        padding: 1rem 0.75rem 0.5rem;
     }
 
     .card {
-        padding: 1rem;
+        padding: 1rem 0.75rem;
     }
 
     h1 {
