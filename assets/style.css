@@ -59,7 +59,7 @@ body {
     background: var(--sf-page);
     color: var(--sf-text);
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    font-size: 15px;
+    font-size: 0.9375rem;  /* rem, like every size here: the A- / A+ buttons scale them all */
     line-height: 1.45;
 }
 
@@ -71,6 +71,7 @@ body {
 
 .page-head {
     display: flex;
+    flex-wrap: wrap;
     justify-content: space-between;
     align-items: flex-start;
     gap: 1rem;
@@ -82,6 +83,16 @@ h1 {
     font-size: 1.9rem;
     font-weight: 700;
     letter-spacing: -0.02em;
+}
+
+.head-tools {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.head-tools .theme-switch {
+    margin-left: 0.5rem;
 }
 
 .tagline {
@@ -613,6 +624,32 @@ button.tool:hover {
 
     .run-row > * {
         flex: 1 1 100%;
+    }
+
+    /* the editable tables must fit ~340 px: tighter columns than on a desktop (their inline
+       widths come from app.py INPUT_TABLE, hence !important) */
+    #gases td, #gases th, #background td, #background th {
+        padding: 0 3px !important;
+    }
+
+    #gases [data-dash-column="molecule"], #background [data-dash-column="molecule"] {
+        min-width: 4.6rem !important;
+        width: 4.6rem !important;
+    }
+
+    #gases [data-dash-column="concentration"], #background [data-dash-column="concentration"],
+    #gases [data-dash-column="unit"], #background [data-dash-column="unit"] {
+        min-width: 3.4rem !important;
+        width: 3.4rem !important;
+    }
+
+    #gases [data-dash-column="isotope"] {
+        min-width: 4.4rem !important;
+        width: 4.4rem !important;
+    }
+
+    .dash-spreadsheet-inner .Select-control {
+        min-width: 0 !important;
     }
 
     .run-row button.primary, .upload .secondary {

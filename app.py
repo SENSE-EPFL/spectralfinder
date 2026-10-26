@@ -317,7 +317,12 @@ app.layout = html.Div([
     html.Header([
         html.Div([html.H1("SpectralFinder"),
                   html.P("Spectral windows where several gases can be measured in one scan.", className="tagline")]),
-        dcc.Checklist([" Dark mode"], [], id="dark", className="theme-switch"),
+        html.Div([
+            # text size, remembered in the browser (assets/text_size.js)
+            html.Button("A−", title="Smaller text", className="tool", **{"data-text-size": "-1"}),
+            html.Button("A+", title="Larger text", className="tool", **{"data-text-size": "+1"}),
+            dcc.Checklist([" Dark mode"], [], id="dark", className="theme-switch"),
+        ], className="head-tools"),
     ], className="page-head"),
 
     # ------------------------------------------------------------------ inputs ----
