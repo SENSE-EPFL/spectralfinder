@@ -425,9 +425,9 @@ app.layout = html.Div([
             # one window at a time (best first); the others one click away, or all of them compared
             # in a collapsed table
             html.Div([
-                html.Button("‹ Previous", id="prev", className="secondary"),
+                html.Button("‹ Previous", id="prev", className="nav-prev"),
                 html.Span(id="window-pos", className="window-pos"),
-                html.Button("Next ›", id="next", className="secondary"),
+                html.Button("Next ›", id="next", className="nav-next"),
                 dcc.Dropdown(id="window-select", clearable=False, searchable=False, className="window-select"),
             ], id="window-nav", className="window-nav"),
             html.Div(id="detail"),
@@ -750,8 +750,10 @@ def window_detail(result, choice: int, labels: list, color: dict, config, dark: 
         style_data_conditional=red, **RESULT_TABLE))
     notes = []
     if c.extra_peaks:
-        notes.append("Other line: another peak of the same gas in the window, also inside the absorption range "
-                     "(small ring) -- listed for its temperature dependence.")
+        notes.append("“Other line” rows: the same gas has a second usable peak in this window (inside the "
+                     "absorption range; small ring on the plot). It doesn't change which window is shown or its "
+                     "rank: it is listed with its own temperature dependence, in case it suits the measurement "
+                     "better (e.g. for an isotope ratio).")
     notes += [f"Ratio {pair}: {k:+.3f} %/K → {1e3 * c.ratio_temperature_error[pair]:.2g} ‰ for "
               f"±{config.temperature_stability_K:g} K" for pair, k in c.ratio_temperature_coeff.items()]
     detail += [html.P(t, className="caption") for t in notes]

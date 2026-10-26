@@ -12,6 +12,8 @@
     --sf-accent: #1c5cab;
     --sf-accent-hover: #184f95;
     --sf-accent-soft: rgba(42, 120, 214, 0.10);
+    --sf-nav-next: #256abf;  /* a step softer than --sf-accent; white text 5.4:1 */
+    --sf-accent-text: #1c5cab;
     --sf-selected: rgba(42, 120, 214, 0.12);
     --sf-critical: #c22f2f;
     --sf-critical-soft: rgba(208, 59, 59, 0.10);
@@ -33,6 +35,8 @@ html.dark {
     --sf-accent: #256abf;
     --sf-accent-hover: #2a78d6;
     --sf-accent-soft: rgba(57, 135, 229, 0.16);
+    --sf-nav-next: #2a6fc4;
+    --sf-accent-text: #86b6ef;
     --sf-selected: rgba(57, 135, 229, 0.20);
     --sf-critical: #e66767;
     --sf-critical-soft: rgba(230, 103, 103, 0.14);
@@ -296,6 +300,34 @@ button.ghost:hover {
 .window-pos {
     min-width: 7.5rem;
     text-align: center;
+}
+
+/* Next: the accent, a little softer than Run search; Previous: the same blue, much lighter */
+.nav-next, .nav-prev {
+    padding: 0.5rem 1rem;
+    border: none;
+    border-radius: 8px;
+    font: inherit;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+.nav-next {
+    background: var(--sf-nav-next);
+    color: #ffffff;
+}
+
+.nav-next:hover {
+    background: var(--sf-accent);
+}
+
+.nav-prev {
+    background: var(--sf-accent-soft);
+    color: var(--sf-accent-text);
+}
+
+.nav-prev:hover {
+    background: var(--sf-selected);
 }
 
 .window-nav button:disabled {
