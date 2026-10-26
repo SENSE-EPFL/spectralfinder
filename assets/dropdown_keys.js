@@ -12,3 +12,18 @@ window.addEventListener("keydown", (event) => {
         event.stopPropagation();
     }
 }, true);
+
+// In the gas column's search box a zero is read as the letter O, so "N20" finds N2O: no
+// molecule name has a zero (an isotopologue does, (70Ge)H4, so the isotope column is left
+// alone). Done on the input event before React reads it, through the native value setter:
+// assigning box.value directly would also update React's copy, and it would then see no change.
+const setValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+window.addEventListener("input", (event) => {
+    const box = event.target;
+    if (box instanceof HTMLInputElement && box.value.includes("0")
+            && box.closest(".dash-spreadsheet td[data-dash-column='molecule'] .Select-input")) {
+        const cursor = box.selectionStart;
+        setValue.call(box, box.value.replaceAll("0", "O"));
+        box.setSelectionRange(cursor, cursor);
+    }
+}, true);

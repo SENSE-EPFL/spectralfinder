@@ -57,11 +57,10 @@ INK_LIGHT = dict(primary="#0b0b0b", secondary="#52514e", muted="#898781", grid="
                  surface="#fcfcfb")
 INK_DARK = dict(primary="#f0efec", secondary="#c3c2b7", muted="#898781", grid="#2c2c2a", axis="#383835",
                 surface="#1a1a19")
-# Zoom tools always shown (Plotly hides its toolbar until hover, easy to miss), and only these: no
-# "Share chart", which sends the data to an outside service. No mouse-wheel zoom: on this long page
-# the wheel must scroll the page, not get caught by the plot.
-GRAPH_CONFIG = {"displaylogo": False, "responsive": True, "displayModeBar": True,
-                "modeBarButtons": [["zoom2d", "pan2d", "zoomIn2d", "zoomOut2d", "resetScale2d", "toImage"]]}
+# Plotly's own toolbar is hidden: its small grey icons were hard to find and to understand. Labelled
+# buttons above the plot replace it (window_detail, assets/plot_tools.js); dragging over the plot
+# still zooms, double-click resets. No mouse-wheel zoom: on this long page the wheel must scroll.
+GRAPH_CONFIG = {"displaylogo": False, "responsive": True, "displayModeBar": False}
 RED = {"color": "var(--sf-critical)", "fontWeight": 600}  # out of range: the status color, never a series
 # Table colors as props, not CSS: Dash's own table CSS outranks a stylesheet, and these inline
 # styles still give way to style_data_conditional (red values, the selected row). Borders are
@@ -732,10 +731,17 @@ def window_detail(result, choice: int, labels: list, color: dict, config, dark: 
                   className="tile-note" + (" bad" if over else "")),
     ], className="tile"))
 
-    detail = [html.Div(tiles, className="tiles"),
-              dcc.Graph(figure=fig, config=GRAPH_CONFIG, className="graph"),
-              html.P("Zoom: drag over a region, or use + / − at the top right of the plot; the house icon "
-                     "(or a double-click) shows the whole window again.", className="caption")]
+    tools = html.Div([
+        html.Span("Zoom", className="tools-label"),
+        html.Button("−", title="Zoom out", className="tool", **{"data-plot-tool": "out"}),
+        html.Button("+", title="Zoom in", className="tool", **{"data-plot-tool": "in"}),
+        html.Button("Reset", title="Show the whole window", className="tool", **{"data-plot-tool": "reset"}),
+        html.Span("or drag over the plot", className="tools-hint"),
+        html.Button("Download PNG", className="tool tool-right",
+                    **{"data-plot-tool": "png", "data-filename": f"window_{c.center:.3f}"}),
+    ], className="plot-tools")
+    detail = [html.Div(tiles, className="tiles"), tools,
+              dcc.Graph(id="spectrum", figure=fig, config=GRAPH_CONFIG, className="graph")]
 
     gas_rows, red = [], []
     for i, g in enumerate(labels):

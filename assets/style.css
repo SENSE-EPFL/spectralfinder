@@ -341,6 +341,49 @@ button.ghost:hover {
     margin-left: auto;
 }
 
+/* zoom / reset / PNG above the plot (assets/plot_tools.js) */
+.plot-tools {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.4rem;
+    margin: 1rem 0 0.25rem;
+}
+
+.tools-label {
+    margin-right: 0.25rem;
+    color: var(--sf-text-2);
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+
+.tools-hint {
+    margin-left: 0.25rem;
+    color: var(--sf-muted);
+    font-size: 0.85rem;
+}
+
+button.tool {
+    min-width: 2.25rem;
+    min-height: 2.1rem;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--sf-border);
+    border-radius: 8px;
+    background: var(--sf-surface);
+    color: var(--sf-text);
+    font: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+}
+
+button.tool:hover {
+    background: var(--sf-surface-2);
+}
+
+.tool-right {
+    margin-left: auto;
+}
+
 .tiles {
     display: grid;
     grid-template-columns: repeat(auto-fit, minmax(9.5rem, 1fr));
