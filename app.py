@@ -57,6 +57,11 @@ INK_LIGHT = dict(primary="#0b0b0b", secondary="#52514e", muted="#898781", grid="
                  surface="#fcfcfb")
 INK_DARK = dict(primary="#f0efec", secondary="#c3c2b7", muted="#898781", grid="#2c2c2a", axis="#383835",
                 surface="#1a1a19")
+# Zoom tools always shown (Plotly hides its toolbar until hover, easy to miss), and only these: no
+# "Share chart", which sends the data to an outside service. No mouse-wheel zoom: on this long page
+# the wheel must scroll the page, not get caught by the plot.
+GRAPH_CONFIG = {"displaylogo": False, "responsive": True, "displayModeBar": True,
+                "modeBarButtons": [["zoom2d", "pan2d", "zoomIn2d", "zoomOut2d", "resetScale2d", "toImage"]]}
 RED = {"color": "var(--sf-critical)", "fontWeight": 600}  # out of range: the status color, never a series
 # Table colors as props, not CSS: Dash's own table CSS outranks a stylesheet, and these inline
 # styles still give way to style_data_conditional (red values, the selected row). Borders are
@@ -693,7 +698,9 @@ def window_detail(result, choice: int, labels: list, color: dict, config, dark: 
                                                      size=12 if main else 11)))
     fig.update_yaxes(type="log", title="α (cm⁻¹)", exponentformat="power", dtick=1,  # decades only
                      gridcolor=ink["grid"], linecolor=ink["axis"], tickfont=dict(color=ink["muted"]))
+    # zooming out stops at the window's edges: the spectrum is only computed over its scan width
     fig.update_xaxes(title="wavenumber (cm⁻¹)", tickformat=".2f", range=[c.lo, c.hi], showspikes=True,
+                     minallowed=c.lo, maxallowed=c.hi,
                      spikemode="across", spikethickness=1, spikedash="solid", spikecolor=ink["muted"],
                      gridcolor=ink["grid"], linecolor=ink["axis"], tickfont=dict(color=ink["muted"]))
     fig.update_layout(height=440, margin=dict(t=48, b=50, l=60, r=48), hovermode="x unified",
@@ -726,7 +733,9 @@ def window_detail(result, choice: int, labels: list, color: dict, config, dark: 
     ], className="tile"))
 
     detail = [html.Div(tiles, className="tiles"),
-              dcc.Graph(figure=fig, config={"displaylogo": False, "responsive": True}, className="graph")]
+              dcc.Graph(figure=fig, config=GRAPH_CONFIG, className="graph"),
+              html.P("Zoom: drag over a region, or use + / − at the top right of the plot; the house icon "
+                     "(or a double-click) shows the whole window again.", className="caption")]
 
     gas_rows, red = [], []
     for i, g in enumerate(labels):
