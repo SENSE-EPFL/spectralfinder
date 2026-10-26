@@ -3,9 +3,10 @@
     uv run prefetch.py
 
 The public app runs with HITRAN_OFFLINE=1 (never downloads, see hitran_tool/lines.py), so
-data/ must already cover every molecule in its menu: run this once before building the
-Docker image. Molecules already cached over the range are skipped; the first run takes a
-while (one HITRANonline request per molecule).
+data/ must already cover every molecule in its menu: the container runs this when it starts,
+before the app (see Dockerfile). The image holds no HITRAN data, as the HITRAN team asked.
+Molecules already cached over the range are skipped, so with data/ on a volume only the first
+deployment downloads -- one HITRANonline request per molecule (59), which takes a while.
 """
 from __future__ import annotations
 

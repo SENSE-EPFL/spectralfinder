@@ -1,11 +1,30 @@
-# HITRAN spectral-window selector
+# SpectralFinder
 
 Finds the spectral window(s) where several target gases (given their
 concentrations) are all simultaneously detectable in ONE measurement --
 i.e. picks the best setting for a single-scan, single-instrument multi-gas
 sensor. This is the case the project targets: one measurement has to see
 every target gas at once, not a different setting per gas. Uses
-line-by-line HITRAN data via [HAPI](https://hitran.org/hapi/).
+line-by-line [HITRAN](https://hitran.org) data via [HAPI](https://hitran.org/hapi/).
+
+SpectralFinder is developed independently at EPFL; it is not developed,
+maintained or endorsed by the HITRAN team.
+
+## Data and citation
+
+Line data are downloaded from HITRANonline and cached locally (`data/`, see
+`hitran_tool/lines.py`), with their retrieval date. HITRAN is updated
+continuously, also between editions, so results can change with the data
+version: report the retrieval date with them. If you use this tool, please cite
+HITRAN and HAPI:
+
+- I. E. Gordon, L. S. Rothman, R. J. Hargreaves et al., *The HITRAN2024 molecular
+  spectroscopic database*, J. Quant. Spectrosc. Radiat. Transfer 353, 109807 (2026),
+  [doi:10.1016/j.jqsrt.2026.109807](https://doi.org/10.1016/j.jqsrt.2026.109807)
+- R. V. Kochanov, I. E. Gordon, L. S. Rothman, P. Wcisło, C. Hill, J. S. Wilzewski,
+  *HITRAN Application Programming Interface (HAPI): A comprehensive approach to working
+  with spectroscopic data*, J. Quant. Spectrosc. Radiat. Transfer 177, 15-30 (2016),
+  [doi:10.1016/j.jqsrt.2016.03.005](https://doi.org/10.1016/j.jqsrt.2016.03.005)
 
 ## Setup
 
@@ -118,27 +137,30 @@ plausible answer. So the search runs in two passes:
 - `hitran_tool/interference.py` -- background/isotopologue interferers per window.
 - `hitran_tool/temperature.py` -- %/K sensitivity per window, per target and per isotopologue ratio.
 - `hitran_tool/report.py` -- text table + per-window detail, CSV export, per-window zoomed plots
-- `hitran_tool/saving.py` -- save / reopen a whole simulation (inputs + results) as JSON
   (selected line of each target circled and labelled, strongest interferers overlaid).
+- `hitran_tool/saving.py` -- save / reopen a whole simulation (inputs + results) as JSON.
 - `atm_standard.csv` -- standard atmospheric mole fractions used as background interferers.
 - `app.py` -- Dash interface (`uv run app.py`).
 - `hitran_tool/worker.py` -- runs one search in a separate process (the app's process pool).
-- `prefetch.py` -- fills `data/` with every molecule over 2000-9000 cm^-1, for the Docker image.
+- `prefetch.py` -- fills `data/` with every molecule over 2000-9000 cm^-1 (run when the container starts).
 
 ## Deployment (public web app)
 
-The app is shipped as a Docker image (`Dockerfile`) that never contacts HITRAN: it runs with
-`HITRAN_OFFLINE=1` and only uses the line lists copied into the image, so a search outside
-2000-9000 cm^-1 is refused with a message instead of starting a multi-minute download.
+The Docker image (`Dockerfile`) holds no HITRAN data, as the HITRAN team asked: when the
+container starts, `prefetch.py` downloads the line lists it doesn't have yet from HITRANonline
+into `data/` -- one request per molecule, 59 in all (~410 MB) -- then the app serves. Mount a
+volume on `/app/data` so that happens only on the first deployment, not on every restart. The
+app itself runs with `HITRAN_OFFLINE=1`: it never downloads, so a search outside 2000-9000
+cm^-1 is refused with a message. The retrieval date is stored with each line list and shown
+at the bottom of the page.
 
 ```
-uv run prefetch.py                 # once: every molecule of the menu, 2000-9000 cm^-1 (~410 MB)
-docker build -t hitran-spectro .
-docker run -p 8501:8501 hitran-spectro
+docker compose up        # -> http://localhost:8501 (health check: /health)
 ```
 
-then http://localhost:8501 (health check: `/health`). The image is built from a local
-checkout because `data/` isn't in git.
+Releases (`.github/workflows/publish-container.yml`): every push to `main` builds the image
+and deploys it to the dev site (EPFL network/VPN only) within ~5 min; a version tag such as
+`1.0.0` (`git tag 1.0.0 && git push origin 1.0.0`) deploys it to the public site, once approved.
 
 - **Parallel searches.** HAPI keeps its state in globals, so concurrent searches in one
   process would overwrite each other's tables. Each search runs in its own worker process

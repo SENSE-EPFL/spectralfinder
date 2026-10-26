@@ -6,7 +6,8 @@ interferers use them all. Fetching per molecule rather than per isotopologue
 keeps it to one HITRANonline request per molecule.
 
 Storage: each table is cached as data/{table}.lines.npz (numeric columns +
-HAPI header + fetched range), not as HAPI's own .data/.header text files.
+HAPI header + fetched range + retrieval date), not as HAPI's own .data/.header
+text files.
 Why: hapi.db_begin() parses EVERY table in its folder on startup, at ~8 us per
 line -- fine for 4 target gases, far too slow once ~40 background molecules
 are cached too. The npz files load in milliseconds and only on demand; HAPI's
@@ -21,6 +22,7 @@ import copy
 import io
 import json
 import os
+from datetime import date
 from pathlib import Path
 
 import hapi
@@ -105,9 +107,24 @@ def _fetch(molecule: str, table: str, lo: float, hi: float) -> None:
         for ext in (".data", ".header"):
             (_FETCH_DIR / f"{tmp}{ext}").unlink(missing_ok=True)
 
-    np.savez(_npz_path(table), __range__=np.array([lo, hi]),
-             __header__=np.array(json.dumps(header)), **data)
+    np.savez(_npz_path(table), __range__=np.array([lo, hi]), __header__=np.array(json.dumps(header)),
+             __retrieved__=np.array(date.today().isoformat()), **data)
     _register(table, data, header, lo, hi)
+
+
+def retrieval_dates() -> tuple | None:
+    """(oldest, newest) date the cached line lists were downloaded from HITRANonline, as
+    'YYYY-MM-DD'; None if nothing is cached. HITRAN is updated continuously, also between
+    editions, so results depend on it. Caches written before the date was stored use
+    their file's date -- written right after the download."""
+    dates = []
+    for path in DATA_DIR.glob("*.lines.npz"):
+        with np.load(path) as f:
+            if "__retrieved__" in f.files:
+                dates.append(str(f["__retrieved__"]))
+            else:
+                dates.append(date.fromtimestamp(path.stat().st_mtime).isoformat())
+    return (min(dates), max(dates)) if dates else None
 
 
 def ensure_lines(molecule: str, sigma_min: float, sigma_max: float) -> str:
