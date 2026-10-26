@@ -74,7 +74,7 @@ INPUT_TABLE = dict(TABLE_COLORS, style_table={"overflow": "visible"},
                    style_cell_conditional=[{"if": {"column_id": "molecule"}, "minWidth": "6.5rem"},
                                            {"if": {"column_id": "unit"}, "minWidth": "4.5rem"},
                                            {"if": {"column_id": "concentration"}, "width": "4.5rem"},
-                                           {"if": {"column_id": "isotope"}, "width": "3.5rem"}])
+                                           {"if": {"column_id": "isotope"}, "minWidth": "5rem"}])
 # Result tables: text left, numbers right (aligned digits, see style.css)
 RESULT_TABLE = dict(TABLE_COLORS, style_table={"overflowX": "auto"},
                     style_cell={"textAlign": "left", "padding": "6px 12px", "fontFamily": "inherit",
@@ -247,6 +247,26 @@ def targets_from_table(table: pd.DataFrame) -> tuple[list, list]:
     return targets, errors
 
 
+DEFAULT_GASES = [
+    {"molecule": "CH4", "concentration": 10.0, "unit": "ppm", "isotope": 1},
+    {"molecule": "N2O", "concentration": 1.0, "unit": "ppm", "isotope": 1},
+    {"molecule": "H2O", "concentration": 30.0, "unit": "%", "isotope": 1},
+]
+
+
+def isotope_dropdowns(rows: list) -> list:
+    """Per-row options of the gases table's isotope column: the isotopologues of the row's
+    molecule by formula -- HITRAN numbers them 1, 2, 3..., which is easy to confuse with the
+    AFGL codes people know them by (446, 456, 448...)."""
+    out = []
+    for row in rows:
+        mol = row.get("molecule")
+        options = [] if mol not in NAME_TO_ID else [
+            {"label": "main" if i == 1 else isotopologue_name(mol, i), "value": i} for i in isotopologue_ids(mol)]
+        out.append({"isotope": {"options": options, "clearable": False}})
+    return out
+
+
 def number_input(key, label, value, min_value=None, max_value=None, step=None, format=None, help=None):
     return html.Div([html.Label(label, title=help, className="field-label"),
                      dcc.Input(id=key, type="number", value=value, min=min_value, max=max_value, step="any",
@@ -303,24 +323,20 @@ app.layout = html.Div([
             html.Div([
                 html.H3("Gases to measure"),
                 dash_table.DataTable(
-                    pd.DataFrame([
-                        {"molecule": "CH4", "concentration": 10.0, "unit": "ppm", "isotope": 1},
-                        {"molecule": "N2O", "concentration": 1.0, "unit": "ppm", "isotope": 1},
-                        {"molecule": "H2O", "concentration": 30.0, "unit": "%", "isotope": 1},
-                    ]).to_dict("records"),
-                    editable=True, row_deletable=True, id="gases",
+                    DEFAULT_GASES, editable=True, row_deletable=True, id="gases",
+                    dropdown_data=isotope_dropdowns(DEFAULT_GASES),
                     columns=[
                         {"name": "gas", "id": "molecule", "presentation": "dropdown"},
                         {"name": "amount", "id": "concentration", "type": "numeric"},
                         {"name": "unit", "id": "unit", "presentation": "dropdown"},
-                        {"name": "isotope", "id": "isotope", "type": "numeric"},
+                        {"name": "isotope", "id": "isotope", "presentation": "dropdown"},
                     ],
                     dropdown={
                         "molecule": {"options": [{"label": n, "value": n} for n in sorted(NAME_TO_ID)],
                                      "clearable": False},
                         "unit": {"options": [{"label": u, "value": u} for u in UNITS], "clearable": False},
                     },
-                    tooltip_header={"isotope": "1 = main isotopologue; e.g. CH4: 2 = ¹³CH4, H2O: 4 = HDO"},
+                    tooltip_header={"isotope": "isotopologue, e.g. for N2O: (14N)(15N)(16O) = 456, (14N)2(18O) = 448"},
                     **INPUT_TABLE,
                 ),
                 html.Button("+ Add gas", id="add", className="ghost"),
@@ -431,6 +447,12 @@ app.clientside_callback("() => matchMedia('(prefers-color-scheme: dark)').matche
                         Output("dark", "value"), Input("dark", "id"))
 app.clientside_callback("v => (document.documentElement.classList.toggle('dark', v.length > 0), 'theme-switch')",
                         Output("dark", "className"), Input("dark", "value"))
+
+
+@app.callback(Output("gases", "dropdown_data"), Input("gases", "data"))
+def isotope_choices(rows):
+    """Each row's isotope menu lists the isotopologues of that row's molecule."""
+    return isotope_dropdowns(rows)
 
 
 @app.callback(Output("gases", "data"), Input("add", "n_clicks"), State("gases", "data"), prevent_initial_call=True)
