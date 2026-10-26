@@ -76,7 +76,32 @@ button.primary:disabled {
     opacity: 0.4;
 }
 
-.error, .warning {
+.upload {
+    padding: 0.75rem;
+    border: 1px dashed var(--border);
+    border-radius: 0.5rem;
+    text-align: center;
+    font-size: 0.875rem;
+    cursor: pointer;
+}
+
+.actions {
+    display: flex;
+    gap: 0.5rem;
+    margin: 1rem 0;
+}
+
+button.secondary {
+    padding: 0.4rem 0.9rem;
+    border: 1px solid var(--border);
+    border-radius: 0.5rem;
+    background: var(--bg);
+    color: var(--text);
+    font: inherit;
+    cursor: pointer;
+}
+
+.error, .warning, .info {
     margin: 0.5rem 0;
     padding: 1rem;
     border-radius: 0.5rem;
@@ -85,6 +110,10 @@ button.primary:disabled {
 
 .warning {
     background: rgba(255, 189, 69, 0.2);
+}
+
+.info {
+    background: rgba(28, 131, 225, 0.12);
 }
 
 .caption {

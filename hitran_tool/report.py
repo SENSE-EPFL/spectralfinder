@@ -9,13 +9,30 @@ from .windows import CombinedSearchResult
 _TOP_INTERFERERS_TEXT = 5  # listed per window in the console report
 _TOP_INTERFERERS_PLOT = 5  # drawn per window in the plots...
 _PLOT_INTERFERER_MIN = 1e-3  # ...if their peak is >= this fraction of the weakest target's alpha
+_TOP_LIMITS = 3  # most critical background gases listed per window
 # Interference ratio shown in red (plot) / with '!' (console) above this. Display only.
 _INTERFERENCE_WARN = 0.01
+# A background gas whose limit is less than this many times its standard concentration
+# is flagged ('!' / red). Display only.
+_LIMIT_WARN_FACTOR = 10
 _RED = "#c22b2b"
 
 
 def _pct(x: float) -> str:
     return f"{100 * x:,.0f}%" if x >= 1 else f"{100 * x:.2g}%"
+
+
+def conc(x: float) -> str:
+    """Mole fraction in the most readable unit: '413 ppb', '369 ppm', '0.723%'."""
+    for unit, scale, start in (("%", 1e-2, 1e-3), (" ppm", 1e-6, 1e-6), (" ppb", 1e-9, 1e-9)):
+        if x >= start:  # % from 0.1%: never more than 999 ppm or ppb
+            return f"{x / scale:.3g}{unit}"
+    return f"{x / 1e-12:.3g} ppt"
+
+
+def limit_str(b) -> str:
+    """'NH3 > 0.41 ppm (4.1e+03x standard) at H2O' for an interference.BackgroundLimit."""
+    return f"{b.molecule} > {conc(b.max_mole_fraction)} ({b.factor:.2g}x standard) at {b.target}"
 
 
 def print_combined_report(result: CombinedSearchResult, names: list | None = None) -> None:
@@ -81,19 +98,23 @@ def print_combined_report(result: CombinedSearchResult, names: list | None = Non
 
     print("\n=== Per-window detail: selected peaks, temperature sensitivity, interferers ===")
     for i, c in enumerate(windows, 1):
-        _print_window_detail(i, c, names)
+        _print_window_detail(i, c, names, result.interference_max)
     print(
         "\npeak      = top of the species' real curve in the window (between two of its lines if\n"
         "            they overlap) -- the point alpha, I/I0, T coeff and interference are read at.\n"
+        "            'X (other)' rows: other tops of X's curve in the window, also inside the\n"
+        "            absorption range -- listed for their T coeff, the window isn't ranked on them.\n"
         "T coeff   = (alpha(T+dT) - alpha(T)) / alpha(T) / dT at that peak, constant P (%/K).\n"
         "interf.   = sum of every other species' alpha at that peak / the target's own alpha there\n"
         "            ('!' above 1%); main = the biggest single contributor. Other species = the\n"
         "            other targets, the targets' own minor isotopologues, and atm_standard.csv\n"
-        "            gases at their standard concentrations. Not used for ranking."
+        "            gases at their standard concentrations. Not used for ranking.\n"
+        "watch     = background gases that would push a target's interference above interference_max\n"
+        f"            at the lowest concentration ('!' below {_LIMIT_WARN_FACTOR}x their standard one)."
     )
 
 
-def _print_window_detail(i: int, c, names: list) -> None:
+def _print_window_detail(i: int, c, names: list, interference_max: float | None = None) -> None:
     print(f"\n#{i}  center {c.center:.3f} cm^-1  [{c.lo:.3f}, {c.hi:.3f}]   "
           f"lowest total I/I0 {c.window_min_transmission:.3f} at {c.window_min_position:.4f}")
     print(f"    {'species':<14}{'peak':>12}{'alpha':>11}{'I/I0':>8}{'T coeff':>10}{'interf.':>10}  main interferer")
@@ -108,8 +129,17 @@ def _print_window_detail(i: int, c, names: list) -> None:
             ratio = c.window_max_alpha[n] / c.peak_alpha[n]
             print(f"    {'':<14}! its alpha is {ratio:.1f}x higher at {c.window_max_position[n]:.4f} "
                   f"({_why_not_max(c, n)})")
+    for p in c.extra_peaks:
+        itf_str = _pct(p.interference) + ("!" if p.interference > _INTERFERENCE_WARN else " ")
+        print(f"    {p.species + ' (other)':<14}{p.position:>12.4f}{p.alpha:>11.2e}{p.transmission:>8.3f}"
+              f"{p.temperature_coeff:>+10.3f}{itf_str:>10}")
     for pair, coeff in c.ratio_temperature_coeff.items():
         print(f"    ratio {pair}: T coeff {coeff:+.3f} %/K  {_ratio_error_str(c, pair)}")
+    if c.background_limits:
+        watch = " | ".join(limit_str(b) + ("  !" if b.factor < _LIMIT_WARN_FACTOR else "")
+                           for b in c.background_limits[:_TOP_LIMITS])
+        print(f"    watch (interference > {_pct(interference_max)}): {watch}" if interference_max
+              else f"    watch: {watch}")
     if c.interferers:
         top = " | ".join(
             f"{r.label} {r.peak_alpha:.1e} @{r.peak_position:.3f} (I/I0 {r.transmission:.4f})"
@@ -140,9 +170,11 @@ def _why_not_max(c, n: str) -> str:
 
 def save_results_csv(result: CombinedSearchResult, output_dir: str) -> list:
     """Write windows.csv (one row per window x target), interferers.csv (window x
-    interferer) and temperature.csv (window x target x T) into output_dir."""
+    interferer), temperature.csv (window x target x T), extra_peaks.csv (window x
+    extra peak) and background_limits.csv (window x background gas) into output_dir."""
     os.makedirs(output_dir, exist_ok=True)
-    paths = [os.path.join(output_dir, f) for f in ("windows.csv", "interferers.csv", "temperature.csv")]
+    paths = [os.path.join(output_dir, f) for f in ("windows.csv", "interferers.csv", "temperature.csv",
+                                                   "extra_peaks.csv", "background_limits.csv")]
 
     with open(paths[0], "w", newline="") as f:
         w = csv.writer(f)
@@ -180,6 +212,22 @@ def save_results_csv(result: CombinedSearchResult, output_dir: str) -> list:
                 a0 = sweep[0][1]
                 for T, a in sweep:
                     w.writerow([i, n, T, a, (a - a0) / a0 if a0 > 0 else ""])
+
+    with open(paths[3], "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["window", "species", "peak_position", "peak_alpha", "transmission", "interference_ratio",
+                    "temperature_coeff_pct_per_K"])
+        for i, c in enumerate(result.windows, 1):
+            for p in c.extra_peaks:
+                w.writerow([i, p.species, p.position, p.alpha, p.transmission, p.interference,
+                            p.temperature_coeff])
+
+    with open(paths[4], "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["window", "molecule", "standard_mole_fraction", "max_mole_fraction", "factor", "target"])
+        for i, c in enumerate(result.windows, 1):
+            for b in c.background_limits:
+                w.writerow([i, b.molecule, b.mole_fraction, b.max_mole_fraction, b.factor, b.target])
     return paths
 
 
@@ -203,7 +251,7 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
     # Annotation goes in a reserved strip BELOW the axes (figure coordinates,
     # not axes coordinates) so it never sits on top of -- and never hides --
     # any plotted curve, unlike an in-plot text box.
-    n_lines = 2 + len(names) + len(c.ratio_temperature_coeff) + 2
+    n_lines = 2 + len(names) + len(c.extra_peaks) + len(c.ratio_temperature_coeff) + 2 + bool(c.background_limits)
     fig_h = 5 + 0.22 * n_lines
     fig, ax = plt.subplots(figsize=(11, fig_h))
 
@@ -216,10 +264,12 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
     # otherwise dozens of 1e-15 curves would crush the log axis.
     floor = _PLOT_INTERFERER_MIN * min(c.peak_alpha.values())
     int_spectra = result.interferer_spectra[index] if index < len(result.interferer_spectra) else {}
+    # Each in its own color (the next ones of the cycle, after the targets'): all in grey,
+    # they couldn't be told apart.
     shown = [r for r in c.interferers if r.peak_alpha >= floor][:_TOP_INTERFERERS_PLOT]
-    for r, ls in zip(shown, ["--", "-.", ":", (0, (5, 2, 1, 2)), (0, (1, 1))]):
+    for j, (r, ls) in enumerate(zip(shown, ["--", "-.", ":", (0, (5, 2, 1, 2)), (0, (1, 1))])):
         nu_grid, alpha = int_spectra[r.label]
-        ax.plot(nu_grid, alpha, color="0.45", ls=ls, lw=1.0, label=f"{r.label} (interferer)")
+        ax.plot(nu_grid, alpha, color=f"C{(len(names) + j) % 10}", ls=ls, lw=1.0, label=f"{r.label} (interferer)")
 
     ax.axvspan(c.lo, c.hi, color="tab:green", alpha=0.08, label="selected window")
 
@@ -235,6 +285,10 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
         if not c.peak_is_window_max[name]:
             ax.plot(c.window_max_position[name], c.window_max_alpha[name], "x", ms=8,
                     color=colors[name], mew=2)
+    for p in c.extra_peaks:  # other usable tops: a smaller circle, its absorption next to it
+        ax.plot(p.position, p.alpha, "o", ms=6, mfc="none", mec=colors[p.species], mew=1.5)
+        ax.annotate(f"{100 * (1 - p.transmission):.1f}%", (p.position, p.alpha), xytext=(0, 7),
+                    textcoords="offset points", ha="center", va="bottom", fontsize=7, color=colors[p.species])
 
     ax.set_yscale("log")
     ax.set_xlabel("Wavenumber (cm$^{-1}$)")
@@ -298,6 +352,15 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
         txt(cols[5], _pct(itf) if itf is not None else "-", color=_RED if bad_itf else "black", bold=bad_itf)
         txt(cols[6], c.main_interferer.get(n) or "-")
         y -= line_h
+    for p in c.extra_peaks:
+        txt(cols[0], f"{p.species} (other)", color=colors[p.species])
+        txt(cols[1], f"{p.position:.4f}")
+        txt(cols[2], f"{p.alpha:.2e}")
+        txt(cols[3], f"{p.transmission:.3f}")
+        txt(cols[4], f"{p.temperature_coeff:+.3f}")
+        bad_itf = p.interference > _INTERFERENCE_WARN
+        txt(cols[5], _pct(p.interference), color=_RED if bad_itf else "black", bold=bad_itf)
+        y -= line_h
     for pair, coeff in c.ratio_temperature_coeff.items():
         ok = c.ratio_temperature_ok.get(pair, True)
         txt(0.06, f"ratio {pair}: T coeff {coeff:+.3f} %/K  {_ratio_error_str(c, pair)}",
@@ -307,6 +370,11 @@ def plot_combined_window_detail(result: CombinedSearchResult, index: int):
               f"at {c.window_min_position:.4f}")
     y -= line_h
     txt(0.06, f"tightest pair: {pair_str}")
+    if c.background_limits:
+        y -= line_h
+        critical = c.background_limits[0].factor < _LIMIT_WARN_FACTOR
+        txt(0.06, "watch: " + " | ".join(limit_str(b) for b in c.background_limits[:_TOP_LIMITS]),
+            color=_RED if critical else "black", bold=critical)
 
     return fig
 

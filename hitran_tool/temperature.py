@@ -27,24 +27,34 @@ from .species import molecule_id
 _HAPI_INTENSITY_FLOOR = 1e-30
 
 
+def alpha_vs_temperature(target, pos: float, config, steps: int | None = None) -> list:
+    """[(T, alpha at `pos`), ...] for T = T, T + dT, ..., T + steps*dT (default
+    config.temperature_steps, at least 1: the headline coefficient needs T + dT)."""
+    dT = config.temperature_step_K
+    steps = config.temperature_steps if steps is None else steps
+    temps = [config.T + k * dT for k in range(max(1, steps) + 1)]
+    table = ensure_lines(target.name, config.sigma_min, config.sigma_max)
+    return [
+        (T, float(absorption_coefficient(table, molecule_id(target.name), target.iso_id, target.mole_fraction,
+                                         np.array([pos]), T, config.P, _HAPI_INTENSITY_FLOOR,
+                                         target.abundance)[0]))
+        for T in temps
+    ]
+
+
+def coefficient(sweep: list) -> float:
+    """Headline coefficient of a sweep, %/K (nan if alpha(T) is 0)."""
+    (T0, a0), (T1, a1) = sweep[0], sweep[1]
+    return 100 * (a1 - a0) / a0 / (T1 - T0) if a0 > 0 else float("nan")
+
+
 def temperature_dependence(window, targets: list, config) -> tuple:
     """Returns ({label: %/K}, {label: [(T, alpha), ...]}, {'a/b': %/K for isotopologue pairs})."""
     dT = config.temperature_step_K
-    # At least T and T + dT: the headline coefficient needs both.
-    temps = [config.T + k * dT for k in range(max(1, config.temperature_steps) + 1)]
-
     sweep, coeff = {}, {}
     for t in targets:
-        pos = window.peak_position[t.label]
-        table = ensure_lines(t.name, config.sigma_min, config.sigma_max)
-        alphas = [
-            float(absorption_coefficient(table, molecule_id(t.name), t.iso_id, t.mole_fraction,
-                                         np.array([pos]), T, config.P, _HAPI_INTENSITY_FLOOR,
-                                         t.abundance)[0])
-            for T in temps
-        ]
-        sweep[t.label] = list(zip(temps, alphas))
-        coeff[t.label] = 100 * (alphas[1] - alphas[0]) / alphas[0] / dT if alphas[0] > 0 else float("nan")
+        sweep[t.label] = alpha_vs_temperature(t, window.peak_position[t.label], config)
+        coeff[t.label] = coefficient(sweep[t.label])
 
     ratio_coeff = {}
     for i, a in enumerate(targets):

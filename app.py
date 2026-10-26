@@ -12,15 +12,24 @@ minutes), ensuite elles sont en cache dans data/ -- sauf avec HITRAN_OFFLINE=1
 
 Chaque recherche tourne dans un processus à part (hitran_tool/worker.py), au plus
 MAX_PARALLEL_SEARCHES (défaut 2) à la fois pour tous les visiteurs.
+
+Une simulation se sauvegarde (un fichier JSON, hitran_tool/saving.py) et se
+rouvre plus tard dans la page sans relancer la recherche.
 """
 from __future__ import annotations
 
+import base64
 import dataclasses
 import functools
+import hashlib
+import io
 import multiprocessing
 import os
+import tempfile
 import threading
 import time
+import zipfile
+from collections import OrderedDict
 from concurrent.futures import ProcessPoolExecutor
 from concurrent.futures.process import BrokenProcessPool
 from pathlib import Path
@@ -30,7 +39,8 @@ import plotly.graph_objects as go
 from dash import Dash, Input, Output, State, ctx, dash_table, dcc, html, no_update
 from dash.dash_table.Format import Format, Scheme
 
-from hitran_tool import SearchConfig, TargetSpecies, worker
+from hitran_tool import SearchConfig, TargetSpecies, saving, worker
+from hitran_tool.report import conc, save_results_csv
 from hitran_tool.species import NAME_TO_ID, isotopologue_ids, isotopologue_name
 
 ROOT = Path(__file__).resolve().parent
@@ -72,6 +82,68 @@ def run_search(targets: tuple, config: tuple, with_background: bool):
         raise
     future.add_done_callback(lambda _: slots.release())
     return future.result()
+
+
+# Opened simulations, like run_search's results: kept on the server (one process, see the
+# Dockerfile), the browser only holds their key. Bounded: an evicted one is opened again.
+_OPENED: OrderedDict = OrderedDict()
+_OPENED_LOCK = threading.Lock()
+_OPENED_MAX = 8
+MAX_UPLOAD_MB = 20
+
+
+def remember_opened(saved: tuple) -> str:
+    """Key for a saving.loads() tuple, until _OPENED_MAX others were opened after it."""
+    key = hashlib.sha256(saving.dumps(*saved).encode()).hexdigest()
+    with _OPENED_LOCK:
+        _OPENED[key] = saved
+        _OPENED.move_to_end(key)
+        while len(_OPENED) > _OPENED_MAX:
+            _OPENED.popitem(last=False)
+    return key
+
+
+def load_run(run: dict) -> dict | None:
+    """The run's targets, config, with_background, result, elapsed and source (file name if
+    it was opened from a saved simulation); None if that one is no longer in memory."""
+    if "opened" in run:
+        with _OPENED_LOCK:
+            saved = _OPENED.get(run["opened"])
+        if saved is None:
+            return None
+        targets, config, with_background, result = saved
+        return dict(targets=targets, config=config, with_background=with_background, result=result,
+                    elapsed=None, source=run["name"])
+    targets = [tuple(t) for t in run["targets"]]
+    config = tuple(map(tuple, run["config"]))
+    return dict(targets=targets, config=SearchConfig(**dict(config)), with_background=run["with_background"],
+                result=run_search(tuple(targets), config, run["with_background"]),
+                elapsed=run["elapsed"], source=None)
+
+
+def describe(r: dict) -> str:
+    """A run's parameters in one line -- for an opened one, the form doesn't show them."""
+    c = r["config"]
+    gases = ", ".join(f"{TargetSpecies(n, x, iso).label} {conc(x)}" for n, x, iso in r["targets"])
+    return (f"{gases} · {c.sigma_min:g}–{c.sigma_max:g} cm⁻¹ · L {c.L_cm / 1e5:g} km · "
+            f"{c.P * 1013.25:.3g} mbar · {c.T - 273.15:.3g} °C · balayage {c.delta_sigma:g} cm⁻¹ · "
+            f"absorption {100 * (1 - c.transmission_max):.3g}–{100 * (1 - c.transmission_min):.3g} % · "
+            f"interférence max. {100 * c.interference_max:.3g} % · "
+            f"gaz de fond {'oui' if r['with_background'] else 'non'}")
+
+
+def file_name(r: dict) -> str:
+    labels = [TargetSpecies(n, x, iso).label for n, x, iso in r["targets"]]
+    return f"simulation_{'_'.join(labels)}_{r['config'].sigma_min:g}-{r['config'].sigma_max:g}"
+
+
+def csv_zip(result) -> bytes:
+    """save_results_csv()'s files, zipped."""
+    buf = io.BytesIO()
+    with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
+        for path in save_results_csv(result, tmp):
+            z.write(path, os.path.basename(path))
+    return buf.getvalue()
 
 
 def targets_from_table(table: pd.DataFrame) -> tuple[list, list]:
@@ -169,6 +241,9 @@ app.layout = html.Div([
 
     html.Div(id="errors"),
     html.Button("Lancer la recherche", id="go", className="primary"),
+    dcc.Upload("Ouvrir une simulation sauvegardée (.json)", id="open", accept=".json,application/json",
+               max_size=MAX_UPLOAD_MB * 1024 * 1024, className="upload"),
+    html.Div(id="open-error"),
     dcc.Store(id="run"),
 
     # ------------------------------------------------------------------ results ----
@@ -176,6 +251,13 @@ app.layout = html.Div([
     dcc.Loading([
         html.Div(id="search-error"),
         html.Div(id="results"),
+        html.Div([
+            html.Button("Sauvegarder la simulation", id="save", className="secondary",
+                        title="paramètres et résultats, à rouvrir ici plus tard"),
+            html.Button("Tableaux (CSV)", id="save-csv", className="secondary",
+                        title="fenêtres, interférents, température, autres raies, gaz à surveiller"),
+            dcc.Download(id="download"),
+        ], id="actions", className="actions", hidden=True),
         html.Div([html.Label("Détail de la fenêtre"), dcc.Dropdown(id="choice", clearable=False)], id="choice-box"),
         html.Div(id="detail"),
     ]),
@@ -243,27 +325,60 @@ def search(_, gases, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_a
                 with_background=bool(with_background), elapsed=time.time() - t0), None
 
 
+@app.callback(Output("run", "data", allow_duplicate=True), Output("open-error", "children"),
+              Output("open", "contents"),  # cleared, so opening the same file again triggers this
+              Input("open", "contents"), State("open", "filename"), prevent_initial_call=True)
+def open_simulation(contents, name):
+    if contents is None:
+        return no_update, no_update, no_update
+    try:
+        saved = saving.loads(base64.b64decode(contents.split(",", 1)[1]))
+    except (ValueError, IndexError) as exc:  # binascii.Error is a ValueError
+        return no_update, html.Div(f"Impossible d'ouvrir {name} : {exc}", className="error"), None
+    return dict(opened=remember_opened(saved), name=name), None, None
+
+
+@app.callback(Output("download", "data"), Input("save", "n_clicks"), Input("save-csv", "n_clicks"),
+              State("run", "data"), prevent_initial_call=True)
+def download(_, __, run):
+    r = load_run(run) if run else None
+    if r is None:
+        return no_update
+    if ctx.triggered_id == "save":
+        return dcc.send_string(saving.dumps(r["targets"], r["config"], r["with_background"], r["result"]),
+                               f"{file_name(r)}.json", type="application/json")
+    return dcc.send_bytes(csv_zip(r["result"]), f"{file_name(r)}_csv.zip", type="application/zip")
+
+
 @app.callback(Output("results", "children"), Output("choice", "options"), Output("choice", "value"),
-              Output("choice-box", "hidden"), Output("detail", "children"),
+              Output("choice-box", "hidden"), Output("detail", "children"), Output("actions", "hidden"),
               Input("run", "data"), Input("choice", "value"), Input("dark", "value"))
 def results(run, choice, dark):
     if run is None:
-        return [], [], None, True, []
+        return [], [], None, True, [], True
 
-    # the browser only keeps the search inputs (dcc.Store); the result comes back from run_search's cache
-    result = run_search(tuple(map(tuple, run["targets"])), tuple(map(tuple, run["config"])), run["with_background"])
-    labels = [TargetSpecies(n, x, iso).label for n, x, iso in run["targets"]]
+    # the browser only keeps the search inputs (dcc.Store); the result comes back from run_search's
+    # cache, or from the opened simulations
+    r = load_run(run)
+    if r is None:
+        return ([html.Div("Cette simulation n'est plus en mémoire sur le serveur : rouvre le fichier.",
+                          className="warning")], [], None, True, [], True)
+    result = r["result"]
+    labels = [TargetSpecies(n, x, iso).label for n, x, iso in r["targets"]]
     color = {n: COLORS[i % len(COLORS)] for i, n in enumerate(labels)}
 
     out = [html.Hr()]
+    if r["source"]:  # the form above still shows its own values, not the file's
+        out.append(html.Div([html.B(f"Simulation ouverte depuis {r['source']}"), f" : {describe(r)}"],
+                            className="info"))
     dropped = result.n_rejected_interference
     out.append(dcc.Markdown(f"**{len(result.windows)} fenêtre{'s' * (len(result.windows) > 1)}**"
                             + (f" · {dropped} éliminée{'s' * (dropped > 1)} pour interférence" if dropped else "")
-                            + f" · {run['elapsed']:.0f} s"))
+                            + (f" · {r['elapsed']:.0f} s" if r["elapsed"] is not None else "")))
     if not result.windows:
         out.append(html.Div("Aucune fenêtre ne passe les critères : essaie une autre plage spectrale ou un seuil "
                             "d'interférence plus élevé.", className="warning"))
-        return out, [], None, True, []
+        return out, [], None, True, [], False
 
     rows, css = [], []
     for i, c in enumerate(result.windows, 1):
@@ -290,10 +405,12 @@ def results(run, choice, dark):
 
     fig = go.Figure()
     fig.add_vrect(x0=c.lo, x1=c.hi, fillcolor="rgba(46,125,79,0.07)", line_width=0)
-    for r in [r for r in c.interferers if r.label in others][:3]:
-        grid, alpha = others[r.label]
-        fig.add_trace(go.Scatter(x=grid, y=alpha, name=r.label, line=dict(color="#999", dash="dash"),
-                                 hovertemplate="%{x:.4f} cm⁻¹<br>α = %{y:.2e}<extra>" + r.label + "</extra>"))
+    # Interferers in the colors after the targets' (all grey, they couldn't be told apart)
+    for j, itf in enumerate([i for i in c.interferers if i.label in others][:3]):
+        grid, alpha = others[itf.label]
+        fig.add_trace(go.Scatter(x=grid, y=alpha, name=itf.label,
+                                 line=dict(color=COLORS[(len(labels) + j) % len(COLORS)], dash="dash"),
+                                 hovertemplate="%{x:.4f} cm⁻¹<br>α = %{y:.2e}<extra>" + itf.label + "</extra>"))
     for n, (grid, alpha) in spectra.items():
         fig.add_trace(go.Scatter(x=grid, y=alpha, name=n, line=dict(color=color[n], width=2.5),
                                  hovertemplate="%{x:.4f} cm⁻¹<br>α = %{y:.2e}<extra>" + n + "</extra>"))
@@ -301,6 +418,11 @@ def results(run, choice, dark):
                                  marker=dict(symbol="circle-open", size=16, color=color[n], line=dict(width=3)),
                                  text=[f"<b>{n}</b> {100 * (1 - c.transmission[n]):.1f} %"],
                                  textposition="top center", textfont=dict(color=color[n]), hoverinfo="skip"))
+    for p in c.extra_peaks:  # other lines in the absorption range: smaller circle
+        fig.add_trace(go.Scatter(x=[p.position], y=[p.alpha], mode="markers+text", showlegend=False,
+                                 marker=dict(symbol="circle-open", size=10, color=color[p.species], line=dict(width=2)),
+                                 text=[f"{100 * (1 - p.transmission):.1f} %"], textposition="top center",
+                                 textfont=dict(color=color[p.species], size=11), hoverinfo="skip"))
     fig.update_yaxes(type="log", title="α (cm⁻¹)", exponentformat="power", dtick=1)  # decades only
     fig.update_xaxes(title="nombre d'onde (cm⁻¹)", tickformat=".2f")
     fig.update_layout(height=460, margin=dict(t=10, b=40), legend=dict(orientation="h", y=-0.2),
@@ -313,12 +435,36 @@ def results(run, choice, dark):
         "interférence (%)": round(100 * c.interference.get(n, float("nan")), 2),
         "principal interférent": c.main_interferer.get(n) or "–",
         "T (%/K)": round(c.temperature_coeff.get(n, float("nan")), 2),
-    } for n in labels])
+    } for n in labels] + [{
+        "gaz": f"{p.species} (autre raie)", "pic (cm⁻¹)": round(p.position, 4),
+        "absorption (%)": round(100 * (1 - p.transmission), 2),
+        "interférence (%)": round(100 * p.interference, 2),
+        "principal interférent": "–",
+        "T (%/K)": round(p.temperature_coeff, 2),
+    } for p in c.extra_peaks])
     detail.append(dash_table.DataTable(details.to_dict("records"), [{"name": col, "id": col} for col in details.columns]))
+    if c.extra_peaks:
+        detail.append(html.P("« autre raie » : autre pic du même gaz dans la fenêtre, aussi dans la plage d'absorption "
+                             "(petit cercle) — donné pour sa dépendance en température.", className="caption"))
     for pair, k in c.ratio_temperature_coeff.items():
         detail.append(html.P(f"Rapport {pair} : {k:+.3f} %/K → {1e3 * c.ratio_temperature_error[pair]:.2g} ‰ pour ±0,1 K",
                              className="caption"))
-    return out, options, choice, False, detail
+
+    if c.background_limits:
+        shown = c.background_limits[:5]
+        limits = pd.DataFrame([{
+            "gaz": b.molecule, "standard": conc(b.mole_fraction), "limite": conc(b.max_mole_fraction),
+            "× standard": f"{b.factor:.2g}", "gêne la mesure de": b.target,
+        } for b in shown])
+        detail.append(html.H4("Gaz de fond à surveiller"))
+        detail.append(dash_table.DataTable(
+            limits.to_dict("records"), [{"name": col, "id": col} for col in limits.columns],
+            style_data_conditional=[{"if": {"row_index": i, "column_id": "limite"}, **RED}
+                                    for i, b in enumerate(shown) if b.factor < 10]))
+        detail.append(html.P(f"Au-delà de la limite, l'interférence sur le gaz mesuré dépasse "
+                             f"{100 * r['config'].interference_max:g} % et la fenêtre ne passe plus ; en rouge : "
+                             "moins de 10× la concentration standard.", className="caption"))
+    return out, options, choice, False, detail, False
 
 
 # A search worker (spawn) re-imports this file as __mp_main__ and must not start

@@ -20,8 +20,10 @@ project supervisor's proposed workflow), plus per-window diagnostics:
   FILTERS + DIAGNOSTICS -- walking the ranked list until max_windows
     windows pass: interferers (interference.py) with, by default, a filter
     on each target's interference; an optional filter on the TOTAL
-    transmission across the window (saturation); and temperature
-    sensitivity (temperature.py, reported only).
+    transmission across the window (saturation); temperature sensitivity
+    (temperature.py, reported only); the targets' other lines in the window
+    that also fit the absorption range; and how far each background gas
+    can rise before the window fails the interference limit.
 
 Doing it the other way around -- full-width, full-physics spectra over the
 whole search range before even looking for candidates -- is what made the
@@ -45,11 +47,12 @@ from math import exp, inf, log, log10
 import numpy as np
 
 from .broadening import doppler_fwhm, lorentz_fwhm, voigt_fwhm, voigt_peak_height
-from .interference import compute_interference, ensure_interferer_lines, interferer_list, target_molecules
+from .interference import (background_limits, compute_interference, ensure_interferer_lines, interferer_list,
+                           target_molecules)
 from .lines import ensure_lines, line_arrays
 from .spectrum import absorption_coefficient, number_density, optical_depth, window_grid
 from .species import molecule_id, natural_abundance, species_label
-from .temperature import temperature_dependence
+from .temperature import alpha_vs_temperature, coefficient, temperature_dependence
 
 # Stage 2 hands HAPI a narrow, already-selected window -- this just keeps numerically-zero
 # lines out of its sum, it's not a presence decision (that's SearchConfig.proxy_cutoff).
@@ -155,6 +158,19 @@ class SearchConfig:
 
 
 @dataclass
+class ExtraPeak:
+    """Another top of a target's curve in the window whose absorption is also inside the
+    target range -- not the one the window was picked for. Listed for its temperature
+    dependence (e.g. an isotope ratio measured on two lines of one species)."""
+    species: str  # TargetSpecies.label
+    position: float  # cm^-1, top of the curve (_refine_top)
+    alpha: float  # cm^-1
+    transmission: float  # exp(-alpha * L_cm)
+    interference: float  # every other species' alpha there / its own, same as CombinedWindowResult
+    temperature_coeff: float  # %/K, same definition as CombinedWindowResult.temperature_coeff
+
+
+@dataclass
 class CombinedWindowResult:
     """One window where EVERY target species has a detectable, mutually
     distinguishable line -- for a single instrument setting that sees several
@@ -198,6 +214,9 @@ class CombinedWindowResult:
     ratio_temperature_ok: dict = field(default_factory=dict)  # {'a/b': error <= ratio_precision}
     rank_interference: dict = field(default_factory=dict)  # {species: interference ratio used for
     # RANKING -- other targets + targets' isotopologues only; empty if rank_by_interference='none'}
+    extra_peaks: list = field(default_factory=list)  # [ExtraPeak], strongest first
+    background_limits: list = field(default_factory=list)  # [interference.BackgroundLimit], most
+    # critical first; empty without a background list
 
 
 @dataclass
@@ -215,6 +234,7 @@ class CombinedSearchResult:
     n_rejected_interference: int = 0  # ranked candidates dropped by the interference filter
     transmission_range: tuple = (None, None)  # the [min, max] I/I0 range actually used
     ratio_precision: float | None = None  # for flagging ratio_temperature_error in reports
+    interference_max: float | None = None  # the limit background_limits are computed against
 
 
 def _separation(peak_positions: dict, fwhm: dict, n_separation: float) -> tuple:
@@ -287,6 +307,29 @@ def _measured_fwhm(grid: np.ndarray, alpha: np.ndarray, k: int, top: float) -> f
 
     left, right = crossing(-1), crossing(+1)
     return None if left is None or right is None else right - left
+
+
+def _extra_peaks(c: CombinedWindowResult, grid: np.ndarray, alphas: dict, targets: list, config) -> list:
+    """Every top of a target's curve inside the window, other than its selected peak, whose
+    absorption is inside [transmission_min, transmission_max] -- see ExtraPeak.
+    alphas: {label: alpha on grid} of the targets AND the interferers."""
+    out = []
+    for t in targets:
+        alpha = alphas[t.label]
+        k_sel = _climb(alpha, int(np.argmin(np.abs(grid - c.peak_position[t.label]))))
+        tops = np.nonzero((alpha[1:-1] > alpha[:-2]) & (alpha[1:-1] >= alpha[2:]))[0] + 1
+        for i in tops:
+            if i == k_sel:
+                continue
+            pos, top = _refine_top(grid, alpha, int(i))
+            transmission = exp(-optical_depth(top, config.L_cm))
+            if not config.transmission_min <= transmission <= config.transmission_max:
+                continue
+            others = sum(float(np.interp(pos, grid, a)) for label, a in alphas.items() if label != t.label)
+            out.append(ExtraPeak(t.label, pos, top, transmission, others / top,
+                                 coefficient(alpha_vs_temperature(t, pos, config, steps=1))))
+    out.sort(key=lambda p: p.alpha, reverse=True)
+    return out
 
 
 def _target_spectra(species: dict, grid: np.ndarray, config) -> dict:
@@ -435,6 +478,13 @@ def find_combined_windows(targets: list, config: SearchConfig,
      11. Temperature sensitivity (%/K per species, and per isotopologue
          ratio, flagged against temperature_stability_K / ratio_precision):
          see temperature.py.
+     12. Extra peaks: every OTHER top of a target's curve in the window whose
+         absorption is also inside the range, with its own interference and
+         T coefficient (ExtraPeak). Listed only: the selected peaks above are
+         still the ones the window is checked and ranked on.
+     13. Background limits: for each background gas, the mole fraction above
+         which some target's interference would exceed interference_max
+         (interference.background_limits). Reported only.
 
     Returns a CombinedSearchResult: .windows is the ranked list of
     CombinedWindowResult (best first, up to max_windows), plus the
@@ -680,6 +730,8 @@ def find_combined_windows(targets: list, config: SearchConfig,
     # stage-2 candidate would cost ~2 s each for nothing.
     interferers = interferer_list(targets, background or {})
     ensure_interferer_lines(interferers, config.sigma_min, config.sigma_max)
+    molecules = target_molecules(targets)
+    background_only = {mol: x for mol, x in (background or {}).items() if mol not in molecules}
     selected, selected_spectra, interferer_spectra = [], [], []
     n_rejected, n_rejected_interference = 0, 0
     for c, spec in candidates:
@@ -707,6 +759,8 @@ def find_combined_windows(targets: list, config: SearchConfig,
                                      for pair, k in c.ratio_temperature_coeff.items()}
         c.ratio_temperature_ok = {pair: err <= config.ratio_precision
                                   for pair, err in c.ratio_temperature_error.items()}
+        c.extra_peaks = _extra_peaks(c, grid, {**target_alpha, **spectra}, targets, config)
+        c.background_limits = background_limits(c, grid, background_only, config)
         selected.append(c)
         selected_spectra.append(spec)
         interferer_spectra.append({label: (grid, alpha) for label, alpha in spectra.items()})
@@ -715,4 +769,5 @@ def find_combined_windows(targets: list, config: SearchConfig,
 
     return CombinedSearchResult(selected, selected_spectra, interferer_spectra, n_rejected,
                                 n_rejected_interference,
-                                (config.transmission_min, config.transmission_max), config.ratio_precision)
+                                (config.transmission_min, config.transmission_max), config.ratio_precision,
+                                config.interference_max)

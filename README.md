@@ -27,9 +27,11 @@ uv run app.py
 
 `app.py` runs the same search with every parameter set from the page (gases and
 isotopes, instrument as L or ringdown time, pressure, temperature, scan width,
-search range, criteria), then shows the ranked windows, an interactive spectrum
-of each one and a CSV download. The default case is SubOcean around its window
-(a few seconds).
+search range, criteria), then shows the ranked windows and an interactive spectrum
+of each one. The default case is SubOcean around its window (a few seconds).
+A simulation can be saved (one JSON file: parameters + every result, spectra
+included -- `hitran_tool/saving.py`) and reopened in the page later without
+searching again; its tables also download as a zip of the CSVs below.
 
 Edit the parameters at the top of `run.py` to change what it searches: target
 species/concentrations, search range, and the instrument's real numbers
@@ -50,8 +52,11 @@ default a window is dropped if any target's interference exceeds 5%
 
 Outputs, per window: the ranked console table, a per-window detail block
 (selected line of each target, T sensitivity in %/K, interference at the
-line), one plot under `window_details/`, and three CSVs under `results/`
-(`windows.csv`, `interferers.csv`, `temperature.csv`).
+line, the targets' other lines that also fit the absorption range, and the
+background gases to watch -- the concentration above which each one would
+break the interference limit), one plot under `window_details/`, and five
+CSVs under `results/` (`windows.csv`, `interferers.csv`, `temperature.csv`,
+`extra_peaks.csv`, `background_limits.csv`).
 
 ### Two-stage search (see `hitran_tool/windows.py` docstring for detail)
 
@@ -113,6 +118,7 @@ plausible answer. So the search runs in two passes:
 - `hitran_tool/interference.py` -- background/isotopologue interferers per window.
 - `hitran_tool/temperature.py` -- %/K sensitivity per window, per target and per isotopologue ratio.
 - `hitran_tool/report.py` -- text table + per-window detail, CSV export, per-window zoomed plots
+- `hitran_tool/saving.py` -- save / reopen a whole simulation (inputs + results) as JSON
   (selected line of each target circled and labelled, strongest interferers overlaid).
 - `atm_standard.csv` -- standard atmospheric mole fractions used as background interferers.
 - `app.py` -- Dash interface (`uv run app.py`).
@@ -225,7 +231,10 @@ on survivors), pairwise target-separation check (hard filter, cheap analytic
 FWHM), transmission at the instrument's real path length (reported, not
 filtered), isotopologues as separate targets, background + isotopologue
 interference check and temperature sensitivity per window (both reported,
-not ranked on), per-window plots with each target's selected line marked.
+not ranked on), per-window plots with each target's selected line marked,
+other in-range lines of each target (with their own T sensitivity), and the
+limit concentration of every background gas before the window fails the
+interference limit.
 
 Deliberately deferred: ranking on interference or T sensitivity (only the
 saturation filter uses the interferers), T sensitivity of the interference
