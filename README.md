@@ -48,9 +48,12 @@ uv run app.py
 isotopes, instrument as L or ringdown time, pressure, temperature, scan width,
 search range, criteria), then shows the ranked windows and an interactive spectrum
 of each one. The default case is SubOcean around its window (a few seconds).
-A simulation can be saved (one JSON file: parameters + every result, spectra
-included -- `hitran_tool/saving.py`) and reopened in the page later without
-searching again; its tables also download as a zip of the CSVs below.
+The background gases default to `atm_standard.csv` and can be edited in the
+page (concentrations changed, gases removed or added -- e.g. for an unusual
+environment). A simulation can be saved (one JSON file: parameters, background
+gases and every result, spectra included -- `hitran_tool/saving.py`) and
+reopened in the page later without searching again; its tables also download
+as a zip of the CSVs below, plus `background.csv`.
 
 Edit the parameters at the top of `run.py` to change what it searches: target
 species/concentrations, search range, and the instrument's real numbers

@@ -12,14 +12,13 @@ from __future__ import annotations
 import contextlib
 import io
 
-from .species import load_background
 from .windows import CombinedSearchResult, SearchConfig, TargetSpecies, find_combined_windows
 
 
-def search(targets: tuple, config: tuple, background_csv: str | None) -> CombinedSearchResult:
+def search(targets: tuple, config: tuple, background: tuple | None) -> CombinedSearchResult:
     """`targets` = ((name, mole_fraction, iso_id), ...), `config` = SearchConfig fields as
-    (name, value) pairs -- plain picklable values, same as app.run_search's cache key."""
-    background = load_background(background_csv) if background_csv else None
+    (name, value) pairs, `background` = ((molecule, mole_fraction), ...) or None -- plain
+    picklable values, same as app.run_search's cache key."""
     with contextlib.redirect_stdout(io.StringIO()):  # HAPI and the fetches print a lot
         return find_combined_windows([TargetSpecies(n, x, iso) for n, x, iso in targets],
-                                     SearchConfig(**dict(config)), background)
+                                     SearchConfig(**dict(config)), dict(background) if background else None)

@@ -22,6 +22,7 @@ import dataclasses
 import functools
 import hashlib
 import io
+import math
 import multiprocessing
 import os
 import tempfile
@@ -41,10 +42,13 @@ from dash.dash_table.Format import Format, Scheme
 from hitran_tool import SearchConfig, TargetSpecies, saving, worker
 from hitran_tool.lines import retrieval_dates
 from hitran_tool.report import conc, save_results_csv
-from hitran_tool.species import NAME_TO_ID, isotopologue_ids, isotopologue_name
+from hitran_tool.species import NAME_TO_ID, isotopologue_ids, isotopologue_name, load_background
 
 ROOT = Path(__file__).resolve().parent
 UNITS = {"ppm": 1e-6, "ppb": 1e-9, "%": 1e-2}
+# background gases span 1e-15 to 0.8: ppt needed too; each shown in the unit conc() would use
+BACKGROUND_UNITS = {"%": (1e-2, 1e-3), "ppm": (1e-6, 1e-6), "ppb": (1e-9, 1e-9), "ppt": (1e-12, 0.0)}
+STANDARD_BACKGROUND = list(load_background(ROOT / "atm_standard.csv").items())
 COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf"]
 RED = {"color": "#c22b2b", "fontWeight": 600}
 
@@ -69,9 +73,9 @@ def search_slots() -> threading.BoundedSemaphore:
 
 
 @functools.lru_cache(maxsize=8)
-def run_search(targets: tuple, config: tuple, with_background: bool):
-    """Cached on its (hashable) inputs: changing a display option doesn't recompute."""
-    background = str(ROOT / "atm_standard.csv") if with_background else None
+def run_search(targets: tuple, config: tuple, background: tuple | None):
+    """Cached on its (hashable) inputs: changing a display option doesn't recompute.
+    background: ((molecule, mole_fraction), ...) or None."""
     slots = search_slots()
     if not slots.acquire(blocking=False):
         raise ServerBusy
@@ -104,21 +108,36 @@ def remember_opened(saved: tuple) -> str:
 
 
 def load_run(run: dict) -> dict | None:
-    """The run's targets, config, with_background, result, elapsed and source (file name if
-    it was opened from a saved simulation); None if that one is no longer in memory."""
+    """The run's targets, config, background, result, elapsed and source (file name if it
+    was opened from a saved simulation); None if that one is no longer in memory."""
     if "opened" in run:
         with _OPENED_LOCK:
             saved = _OPENED.get(run["opened"])
         if saved is None:
             return None
-        targets, config, with_background, result = saved
-        return dict(targets=targets, config=config, with_background=with_background, result=result,
+        targets, config, background, result = saved
+        return dict(targets=targets, config=config, background=background, result=result,
                     elapsed=None, source=run["name"])
     targets = [tuple(t) for t in run["targets"]]
     config = tuple(map(tuple, run["config"]))
-    return dict(targets=targets, config=SearchConfig(**dict(config)), with_background=run["with_background"],
-                result=run_search(tuple(targets), config, run["with_background"]),
+    background = None if run["background"] is None else [tuple(b) for b in run["background"]]
+    return dict(targets=targets, config=SearchConfig(**dict(config)), background=background,
+                result=run_search(tuple(targets), config, None if background is None else tuple(background)),
                 elapsed=run["elapsed"], source=None)
+
+
+def describe_background(background: list | None, most: int = 8) -> str:
+    """'standard background (42 gases)', or how it differs from the standard one."""
+    if background is None:
+        return "no background gases"
+    standard, bg = dict(STANDARD_BACKGROUND), dict(background)
+    changed = [m for m in bg if m not in standard or not math.isclose(bg[m], standard[m], rel_tol=1e-6)]
+    removed = [m for m in standard if m not in bg]
+    if not changed and not removed:
+        return f"standard background ({len(bg)} gases)"
+    parts = [f"{m} {conc(bg[m])}" for m in changed] + [f"no {m}" for m in removed]
+    more = f" and {len(parts) - most} more" if len(parts) > most else ""
+    return "background: standard except " + ", ".join(parts[:most]) + more
 
 
 def describe(r: dict) -> str:
@@ -128,8 +147,7 @@ def describe(r: dict) -> str:
     return (f"{gases} · {c.sigma_min:g}–{c.sigma_max:g} cm⁻¹ · L {c.L_cm / 1e5:g} km · "
             f"{c.P * 1013.25:.3g} mbar · {c.T - 273.15:.3g} °C · scan {c.delta_sigma:g} cm⁻¹ · "
             f"absorption {100 * (1 - c.transmission_max):.3g}–{100 * (1 - c.transmission_min):.3g} % · "
-            f"max. interference {100 * c.interference_max:.3g} % · "
-            f"background gases {'yes' if r['with_background'] else 'no'}")
+            f"max. interference {100 * c.interference_max:.3g} % · {describe_background(r['background'])}")
 
 
 def file_name(r: dict) -> str:
@@ -137,13 +155,45 @@ def file_name(r: dict) -> str:
     return f"simulation_{'_'.join(labels)}_{r['config'].sigma_min:g}-{r['config'].sigma_max:g}"
 
 
-def csv_zip(result) -> bytes:
-    """save_results_csv()'s files, zipped."""
+def csv_zip(result, background: list | None) -> bytes:
+    """save_results_csv()'s files, plus the background gases used, zipped."""
     buf = io.BytesIO()
     with tempfile.TemporaryDirectory() as tmp, zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for path in save_results_csv(result, tmp):
             z.write(path, os.path.basename(path))
+        if background is not None:
+            z.writestr("background.csv", "molecule,mole_fraction\n" + "".join(f"{m},{x!r}\n" for m, x in background))
     return buf.getvalue()
+
+
+def background_rows(background: list) -> list:
+    """Table rows for [(molecule, mole_fraction)], each in the most readable unit."""
+    rows = []
+    for mol, x in background:
+        unit, (scale, _) = next((u, v) for u, v in BACKGROUND_UNITS.items() if x >= v[1])
+        rows.append({"molecule": mol, "concentration": float(f"{x / scale:.4g}"), "unit": unit})
+    return rows
+
+
+def background_from_table(rows: list) -> tuple[list, list]:
+    """([(molecule, mole_fraction)], errors)."""
+    background, errors, seen = [], [], set()
+    for row in rows:
+        mol = row.get("molecule")
+        if not mol:
+            continue
+        try:
+            x = float(row.get("concentration")) * BACKGROUND_UNITS[row.get("unit") or "ppm"][0]
+        except (TypeError, ValueError):
+            x = 0.0
+        if not 0 < x <= 1:
+            errors.append(f"background {mol}: concentration missing, zero or above 100 %")
+        elif mol in seen:
+            errors.append(f"background {mol}: listed twice")
+        else:
+            seen.add(mol)
+            background.append((mol, x))
+    return background, errors
 
 
 def targets_from_table(table: pd.DataFrame) -> tuple[list, list]:
@@ -263,10 +313,34 @@ app.layout = html.Div([
                              help="detection limit: required SNR / spectrum SNR (10 / 1000)"),
                 number_input("max_abs", "Max. absorption (%)", value=20.0, min_value=0.1, max_value=99.0, format="%g"),
                 number_input("interference_max", "Max. interference (%)", value=5.0, min_value=0.1, format="%g"),
-                dcc.Checklist([" Background gases (42)"], [" Background gases (42)"], id="with_background", className="field"),
+                dcc.Checklist([{"label": " Background gases", "value": "on"}], ["on"], id="with_background",
+                              className="field"),
             ], className="pair"),
         ]),
     ], className="columns"),
+
+    html.Details([
+        html.Summary("Edit background gases"),
+        html.P("Interferers checked in every window, at these concentrations -- by default a standard "
+               "atmosphere (atm_standard.csv). A gas that is also measured takes the concentration given "
+               "above instead.", className="caption"),
+        dash_table.DataTable(
+            background_rows(STANDARD_BACKGROUND), id="background", editable=True, row_deletable=True,
+            columns=[
+                {"name": "molecule", "id": "molecule", "presentation": "dropdown"},
+                {"name": "concentration", "id": "concentration", "type": "numeric"},
+                {"name": "unit", "id": "unit", "presentation": "dropdown"},
+            ],
+            dropdown={
+                "molecule": {"options": [{"label": n, "value": n} for n in sorted(NAME_TO_ID)], "clearable": False},
+                "unit": {"options": [{"label": u, "value": u} for u in BACKGROUND_UNITS], "clearable": False},
+            },
+            style_table={"maxHeight": "22rem", "overflowY": "auto"},
+        ),
+        html.Div([html.Button("+", id="add-background", className="add"),
+                  html.Button("Reset to standard", id="reset-background", className="secondary")],
+                 className="actions"),
+    ], className="background-box"),
 
     html.Div(id="errors"),
     html.Button("Run search", id="go", className="primary"),
@@ -305,32 +379,53 @@ def add_gas(_, gases):
     return gases + [{"molecule": None, "concentration": None, "unit": "ppm", "isotope": 1}]
 
 
-def check(gases, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs, interference_max,
-          with_background):
+@app.callback(Output("background", "data"), Input("add-background", "n_clicks"),
+              Input("reset-background", "n_clicks"), State("background", "data"), prevent_initial_call=True)
+def edit_background(_, __, rows):
+    if ctx.triggered_id == "reset-background":
+        return background_rows(STANDARD_BACKGROUND)
+    return rows + [{"molecule": None, "concentration": None, "unit": "ppm"}]
+
+
+@app.callback(Output("with_background", "options"), Input("background", "data"))
+def background_label(rows):
+    """' Background gases (42)', '(43, edited)' once it differs from the standard list."""
+    background, _ = background_from_table(rows)
+    edited = describe_background(background).startswith("background: standard except")
+    return [{"label": f" Background gases ({len(background)}{', edited' if edited else ''})", "value": "on"}]
+
+
+def check(gases, background_table, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs,
+          interference_max, with_background):
+    """(targets, background or None if switched off, errors)."""
     targets, errors = targets_from_table(pd.DataFrame(gases))
+    background = None
+    if with_background:
+        background, background_errors = background_from_table(background_table)
+        errors += background_errors
     if None in (L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs, interference_max):
-        return targets, errors + ["a value is missing or invalid"]
+        return targets, background, errors + ["a value is missing or invalid"]
     if min_abs >= max_abs:
         errors.append("min. absorption must be below max. absorption")
     if sigma_min >= sigma_max:
         errors.append("the spectral range is empty")
-    return targets, errors
+    return targets, background, errors
 
 
 @app.callback(Output("errors", "children"), Output("go", "disabled"),
-              Input("gases", "data"), [Input(f, "value") for f in FIELDS])
+              Input("gases", "data"), Input("background", "data"), [Input(f, "value") for f in FIELDS])
 def show_errors(*values):
-    errors = check(*values)[1]
+    errors = check(*values)[2]
     return [html.Div(e, className="error") for e in errors], bool(errors)
 
 
 @app.callback(Output("run", "data"), Output("search-error", "children"),
-              Input("go", "n_clicks"), State("gases", "data"), [State(f, "value") for f in FIELDS],
-              prevent_initial_call=True)
-def search(_, gases, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs, interference_max,
-           with_background):
-    targets, errors = check(gases, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs,
-                            interference_max, with_background)
+              Input("go", "n_clicks"), State("gases", "data"), State("background", "data"),
+              [State(f, "value") for f in FIELDS], prevent_initial_call=True)
+def search(_, gases, background_table, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs,
+           interference_max, with_background):
+    targets, background, errors = check(gases, background_table, L_km, delta_sigma, P_mbar, T_C, sigma_min,
+                                        sigma_max, min_abs, max_abs, interference_max, with_background)
     if errors:
         return no_update, no_update
     config = SearchConfig(
@@ -341,7 +436,8 @@ def search(_, gases, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_a
     )
     t0 = time.time()
     try:
-        run_search(tuple(targets), tuple(sorted(dataclasses.asdict(config).items())), bool(with_background))
+        run_search(tuple(targets), tuple(sorted(dataclasses.asdict(config).items())),
+                   None if background is None else tuple(background))
     except ValueError as exc:
         return None, html.Div(f"Invalid parameters: {exc}", className="error")
     except ServerBusy:
@@ -352,7 +448,7 @@ def search(_, gases, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_a
         return None, html.Div("The search failed (server overloaded?): try again, or narrow the spectral range.",
                               className="error")
     return dict(targets=targets, config=sorted(dataclasses.asdict(config).items()),
-                with_background=bool(with_background), elapsed=time.time() - t0), None
+                background=background, elapsed=time.time() - t0), None
 
 
 @app.callback(Output("run", "data", allow_duplicate=True), Output("open-error", "children"),
@@ -362,7 +458,7 @@ def open_simulation(contents, name):
     if contents is None:
         return no_update, no_update, no_update
     try:
-        saved = saving.loads(base64.b64decode(contents.split(",", 1)[1]))
+        saved = saving.loads(base64.b64decode(contents.split(",", 1)[1]), STANDARD_BACKGROUND)
     except (ValueError, IndexError) as exc:  # binascii.Error is a ValueError
         return no_update, html.Div(f"Can't open {name}: {exc}", className="error"), None
     return dict(opened=remember_opened(saved), name=name), None, None
@@ -375,9 +471,9 @@ def download(_, __, run):
     if r is None:
         return no_update
     if ctx.triggered_id == "save":
-        return dcc.send_string(saving.dumps(r["targets"], r["config"], r["with_background"], r["result"]),
+        return dcc.send_string(saving.dumps(r["targets"], r["config"], r["background"], r["result"]),
                                f"{file_name(r)}.json", type="application/json")
-    return dcc.send_bytes(csv_zip(r["result"]), f"{file_name(r)}_csv.zip", type="application/zip")
+    return dcc.send_bytes(csv_zip(r["result"], r["background"]), f"{file_name(r)}_csv.zip", type="application/zip")
 
 
 @app.callback(Output("results", "children"), Output("choice", "options"), Output("choice", "value"),
@@ -405,6 +501,9 @@ def results(run, choice, dark):
     out.append(dcc.Markdown(f"**{len(result.windows)} window{'s' * (len(result.windows) != 1)}**"
                             + (f" · {dropped} dropped for interference" if dropped else "")
                             + (f" · {r['elapsed']:.0f} s" if r["elapsed"] is not None else "")))
+    background_note = describe_background(r["background"])
+    if not r["source"] and not background_note.startswith("standard"):  # the banner already says it
+        out.append(html.P(background_note[0].upper() + background_note[1:], className="caption"))
     if not result.windows:
         out.append(html.Div("No window meets the criteria: try another spectral range or a higher "
                             "interference limit.", className="warning"))

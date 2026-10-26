@@ -21,11 +21,13 @@ from .interference import BackgroundLimit, InterfererResult
 from .windows import CombinedSearchResult, CombinedWindowResult, ExtraPeak, SearchConfig
 
 FORMAT = "hitran-window-search"
-VERSION = 1
+# 1: background was only on/off (the standard list); 2: the background list itself
+VERSION = 2
 
 
-def dumps(targets: list, config: SearchConfig, with_background: bool, result: CombinedSearchResult) -> str:
-    """targets: [(name, mole_fraction, iso_id)], as the web app holds them."""
+def dumps(targets: list, config: SearchConfig, background: list | None, result: CombinedSearchResult) -> str:
+    """targets: [(name, mole_fraction, iso_id)], background: [(molecule, mole_fraction)] or
+    None, as the web app holds them."""
     windows = []
     for c, spectra, others in zip(result.windows, result.window_spectra, result.interferer_spectra):
         grid = next(iter(spectra.values()))[0]
@@ -38,19 +40,25 @@ def dumps(targets: list, config: SearchConfig, with_background: bool, result: Co
     summary = {f.name: getattr(result, f.name) for f in dataclasses.fields(result)
                if f.name not in ("windows", "window_spectra", "interferer_spectra")}
     return json.dumps(dict(format=FORMAT, version=VERSION, targets=[list(t) for t in targets],
-                           config=dataclasses.asdict(config), with_background=with_background,
+                           config=dataclasses.asdict(config),
+                           background=None if background is None else [list(b) for b in background],
                            summary=summary, windows=windows), default=_numpy_scalar)
 
 
-def loads(text: str | bytes) -> tuple:
-    """(targets, config, with_background, result), as passed to dumps(). ValueError if the
-    file isn't a saved simulation of a version this code can read."""
+def loads(text: str | bytes, standard_background: list | None = None) -> tuple:
+    """(targets, config, background, result), as passed to dumps(). ValueError if the file
+    isn't a saved simulation of a version this code can read. standard_background: what
+    a version-1 file's 'background on' meant."""
     try:
         d = json.loads(text)
         if not isinstance(d, dict) or d.get("format") != FORMAT:
             raise ValueError("not a saved simulation")
-        if d.get("version") != VERSION:
-            raise ValueError(f"saved with format version {d.get('version')}, this version reads {VERSION}")
+        if d.get("version") == 1:
+            background = list(standard_background or []) if d["with_background"] else None
+        elif d.get("version") == VERSION:
+            background = None if d["background"] is None else [(str(m), float(x)) for m, x in d["background"]]
+        else:
+            raise ValueError(f"saved with format version {d.get('version')}, this version reads 1-{VERSION}")
         targets = [(str(n), float(x), int(iso)) for n, x, iso in d["targets"]]
         config = SearchConfig(**d["config"])
         windows, window_spectra, interferer_spectra = [], [], []
@@ -62,7 +70,7 @@ def loads(text: str | bytes) -> tuple:
                                        for n, a in w["interferer_spectra"].items()})
         summary = dict(d["summary"], transmission_range=tuple(d["summary"]["transmission_range"]))
         result = CombinedSearchResult(windows, window_spectra, interferer_spectra, **summary)
-        return targets, config, bool(d["with_background"]), result
+        return targets, config, background, result
     except (KeyError, TypeError, ValueError) as exc:  # json.JSONDecodeError is a ValueError
         raise ValueError(f"can't read this file: {exc}") from exc
 
