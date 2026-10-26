@@ -1,169 +1,403 @@
+/* Colors as tokens; html.dark (set by the "Dark mode" switch, which follows the system
+   setting on load) swaps them. Ink and surfaces match the chart's (app.py INK_LIGHT/DARK). */
 :root {
-    --bg: #ffffff;
-    --text: #31333f;
-    --secondary: #f0f2f6;
-    --border: rgba(49, 51, 63, 0.2);
-    --Dash-Fill-Interactive-Strong: #ff4b4b;
+    color-scheme: light;
+    --page: #f6f6f3;
+    --surface: #ffffff;
+    --surface-2: #f3f3f0;
+    --text: #0b0b0b;
+    --text-2: #52514e;
+    --muted: #898781;
+    --border: rgba(11, 11, 11, 0.12);
+    --accent: #1c5cab;
+    --accent-hover: #184f95;
+    --accent-soft: rgba(42, 120, 214, 0.10);
+    --selected: rgba(42, 120, 214, 0.12);
+    --critical: #c22f2f;
+    --critical-soft: rgba(208, 59, 59, 0.10);
+    --warning-soft: rgba(250, 178, 25, 0.16);
+    --radius: 12px;
+    --Dash-Fill-Interactive-Strong: #1c5cab;
 }
 
 html.dark {
     color-scheme: dark;
-    --bg: #0e1117;
-    --text: #fafafa;
-    --secondary: #262730;
-    --border: rgba(250, 250, 250, 0.2);
-    --Dash-Fill-Inverse-Strong: #262730;
-    --Dash-Text-Strong: #fafafa;
-    --Dash-Text-Primary: rgba(250, 250, 250, 0.87);
-    --Dash-Text-Weak: rgba(250, 250, 250, 0.65);
-    --Dash-Stroke-Strong: rgba(250, 250, 250, 0.45);
-    --Dash-Stroke-Weak: rgba(250, 250, 250, 0.12);
-    --Dash-Fill-Primary-Hover: rgba(250, 250, 250, 0.06);
+    --page: #0d0d0d;
+    --surface: #1a1a19;
+    --surface-2: #232322;
+    --text: #f0efec;
+    --text-2: #c3c2b7;
+    --muted: #898781;
+    --border: rgba(255, 255, 255, 0.12);
+    --accent: #256abf;
+    --accent-hover: #2a78d6;
+    --accent-soft: rgba(57, 135, 229, 0.16);
+    --selected: rgba(57, 135, 229, 0.20);
+    --critical: #e66767;
+    --critical-soft: rgba(230, 103, 103, 0.14);
+    --warning-soft: rgba(250, 178, 25, 0.14);
+    --Dash-Fill-Interactive-Strong: #3987e5;
+    --Dash-Fill-Inverse-Strong: #232322;
+    --Dash-Text-Strong: #f0efec;
+    --Dash-Text-Primary: rgba(240, 239, 236, 0.87);
+    --Dash-Text-Weak: rgba(240, 239, 236, 0.65);
+    --Dash-Stroke-Strong: rgba(240, 239, 236, 0.45);
+    --Dash-Stroke-Weak: rgba(240, 239, 236, 0.12);
+    --Dash-Fill-Primary-Hover: rgba(240, 239, 236, 0.06);
 }
+
+/* ---------------------------------------------------------------- page ---- */
 
 body {
     margin: 0;
-    padding: 2rem 5rem;
-    font-family: "Source Sans Pro", "Source Sans 3", sans-serif;
-    background: var(--bg);
+    background: var(--page);
     color: var(--text);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 15px;
+    line-height: 1.45;
+}
+
+.page {
+    max-width: 1280px;
+    margin: 0 auto;
+    padding: 2rem 2rem 1rem;
+}
+
+.page-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1.5rem;
 }
 
 h1 {
-    font-size: 2.75rem;
+    margin: 0;
+    font-size: 1.9rem;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+}
+
+.tagline {
+    margin: 0.25rem 0 0;
+    color: var(--text-2);
+}
+
+h2 {
+    margin: 0;
+    font-size: 1.25rem;
+    font-weight: 650;
 }
 
 h3 {
-    font-size: 1.5rem;
-    font-weight: 600;
+    margin: 1.5rem 0 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 650;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-2);
 }
 
-.theme-switch {
-    position: absolute;
-    top: 1.5rem;
-    right: 5rem;
+.group > h3:first-child {
+    margin-top: 0;
 }
 
+.card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 1.5rem;
+    margin-bottom: 1.5rem;
+}
+
+.section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.75rem;
+    margin-bottom: 1rem;
+}
+
+/* minmax(0, ...): a column may shrink below its content (tables scroll, inputs narrow),
+   otherwise the page overflows on a phone */
 .columns {
     display: grid;
-    grid-template-columns: 1.3fr 1fr 1fr;
-    gap: 3rem;
+    grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) minmax(0, 1fr);
+    gap: 2.5rem;
 }
 
 .pair {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 0 1rem;
 }
 
 .field {
-    margin-bottom: 1rem;
+    min-width: 0;
+    margin-bottom: 0.9rem;
     font-size: 0.875rem;
 }
 
-button.primary {
-    width: 100%;
-    margin: 1rem 0;
-    padding: 0.5rem;
-    border: none;
-    border-radius: 0.5rem;
-    background: #ff4b4b;
-    color: white;
+.field input {
+    min-width: 0;
+}
+
+.field-label {
+    display: block;
+    margin-bottom: 0.25rem;
+    color: var(--text-2);
+}
+
+.check {
+    align-self: end;
+    padding-bottom: 0.5rem;
+}
+
+/* ------------------------------------------------------------- buttons ---- */
+
+button.primary, button.secondary, button.ghost, .upload .secondary {
     font: inherit;
+    border-radius: 8px;
+    cursor: pointer;
+}
+
+button.primary {
+    padding: 0.6rem 1.75rem;
+    border: none;
+    background: var(--accent);
+    color: #ffffff;
+    font-weight: 600;
+}
+
+button.primary:hover {
+    background: var(--accent-hover);
 }
 
 button.primary:disabled {
     opacity: 0.4;
+    cursor: not-allowed;
 }
 
+button.secondary, .upload .secondary {
+    display: inline-block;
+    padding: 0.5rem 1rem;
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+}
+
+button.secondary:hover, .upload .secondary:hover {
+    background: var(--surface-2);
+}
+
+button.ghost {
+    margin-top: 0.5rem;
+    padding: 0.3rem 0.6rem;
+    border: none;
+    background: none;
+    color: var(--accent);
+    font-size: 0.875rem;
+}
+
+html.dark button.ghost {
+    color: #86b6ef;
+}
+
+button.ghost:hover {
+    background: var(--accent-soft);
+}
+
+.actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.run-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 0.75rem;
+    margin-top: 1.25rem;
+}
+
+.upload {
+    display: inline-block;
+}
+
+/* ------------------------------------------------------------ messages ---- */
+
+.error, .warning, .info {
+    margin: 0.75rem 0;
+    padding: 0.75rem 1rem;
+    border-radius: 8px;
+    font-size: 0.9rem;
+}
+
+.error {
+    background: var(--critical-soft);
+    border-left: 3px solid var(--critical);
+}
+
+.warning {
+    background: var(--warning-soft);
+    border-left: 3px solid #fab219;
+}
+
+.info {
+    background: var(--accent-soft);
+    border-left: 3px solid var(--accent);
+}
+
+.caption {
+    margin: 0.5rem 0 0;
+    color: var(--muted);
+    font-size: 0.85rem;
+}
+
+.stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-bottom: 1rem;
+}
+
+.stat {
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: 0.875rem;
+}
+
+.stat b {
+    color: var(--text);
+}
+
+/* -------------------------------------------------- background gases ---- */
+
 .background-box {
-    margin: 0 0 1rem;
+    margin-top: 1.5rem;
+    padding-top: 1rem;
+    border-top: 1px solid var(--border);
     font-size: 0.875rem;
 }
 
 .background-box summary {
     cursor: pointer;
     font-weight: 600;
+    color: var(--text-2);
 }
 
-.upload {
-    padding: 0.75rem;
-    border: 1px dashed var(--border);
-    border-radius: 0.5rem;
-    text-align: center;
-    font-size: 0.875rem;
+.background-box[open] summary {
+    margin-bottom: 0.5rem;
+}
+
+/* --------------------------------------------------------------- tables ---- */
+
+.dash-spreadsheet-inner * {
+    font-family: inherit !important;
+}
+
+/* cell colors and alignment are table props (app.py TABLE_COLORS / RESULT_TABLE) */
+.dash-spreadsheet-inner th,
+.dash-spreadsheet-inner td {
+    border: none !important;
+    border-bottom: 1px solid var(--border) !important;
+}
+
+.dash-spreadsheet-inner td {
+    font-variant-numeric: tabular-nums;
+}
+
+.dash-spreadsheet-inner td * {
+    color: inherit !important;
+}
+
+/* dropdowns inside the editable tables */
+.dash-spreadsheet-inner .Select-control,
+.dash-spreadsheet-inner .Select-menu-outer,
+.dash-spreadsheet-inner .Select-option {
+    background-color: var(--surface) !important;
+    border-color: var(--border) !important;
+}
+
+.dash-spreadsheet-inner .Select-option.is-focused {
+    background-color: var(--surface-2) !important;
+}
+
+#windows .dash-spreadsheet-inner td {
     cursor: pointer;
 }
 
-.actions {
-    display: flex;
-    gap: 0.5rem;
-    margin: 1rem 0;
+#windows .dash-spreadsheet-inner tr:hover td {
+    background-color: var(--surface-2) !important;
 }
 
-button.secondary {
-    padding: 0.4rem 0.9rem;
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
-    background: var(--bg);
+.window-title {
+    margin: 2rem 0 0.25rem;
+    font-size: 1.05rem;
+    text-transform: none;
+    letter-spacing: 0;
     color: var(--text);
-    font: inherit;
-    cursor: pointer;
 }
 
-.error, .warning, .info {
-    margin: 0.5rem 0;
-    padding: 1rem;
-    border-radius: 0.5rem;
-    background: rgba(255, 75, 75, 0.15);
+.graph {
+    margin: 0.5rem -0.5rem 0.75rem;
 }
 
-.warning {
-    background: rgba(255, 189, 69, 0.2);
-}
-
-.info {
-    background: rgba(28, 131, 225, 0.12);
-}
-
-.caption {
-    opacity: 0.6;
-    font-size: 0.875rem;
-}
+/* --------------------------------------------------------------- footer ---- */
 
 .footer {
-    margin-top: 3rem;
-    padding-top: 1rem;
-    border-top: 1px solid var(--border);
-    opacity: 0.7;
+    margin-top: 1rem;
+    padding: 1rem 0 2rem;
+    color: var(--muted);
     font-size: 0.8rem;
+}
+
+.footer p {
+    margin: 0.4rem 0;
+}
+
+.footer ul {
+    margin: 0.4rem 0;
+    padding-left: 1.2rem;
 }
 
 .footer a {
     color: inherit;
 }
 
-hr, table, th, td {
-    border: 1px solid var(--border);
-    border-collapse: collapse;
+/* --------------------------------------------------------------- phone ---- */
+
+@media (max-width: 960px) {
+    .columns {
+        grid-template-columns: minmax(0, 1fr);
+        gap: 1.5rem;
+    }
 }
 
-th, td {
-    padding: 0.25rem 0.75rem;
-    text-align: right;
-}
+@media (max-width: 600px) {
+    .page {
+        padding: 1rem 1rem 0.5rem;
+    }
 
-.dash-spreadsheet-inner * {
-    font-family: inherit !important;
-    background-color: var(--bg) !important;
-    text-align: left !important;
-}
+    .card {
+        padding: 1rem;
+    }
 
-.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner td,
-.dash-table-container .dash-spreadsheet-container .dash-spreadsheet-inner th {
-    color: var(--text);
-}
+    h1 {
+        font-size: 1.5rem;
+    }
 
-.dash-spreadsheet-inner td * {
-    color: inherit !important;
+    .run-row > * {
+        flex: 1 1 100%;
+    }
+
+    .run-row button.primary, .upload .secondary {
+        width: 100%;
+        text-align: center;
+        box-sizing: border-box;
+    }
 }

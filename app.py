@@ -49,8 +49,28 @@ UNITS = {"ppm": 1e-6, "ppb": 1e-9, "%": 1e-2}
 # background gases span 1e-15 to 0.8: ppt needed too; each shown in the unit conc() would use
 BACKGROUND_UNITS = {"%": (1e-2, 1e-3), "ppm": (1e-6, 1e-6), "ppb": (1e-9, 1e-9), "ppt": (1e-12, 0.0)}
 STANDARD_BACKGROUND = list(load_background(ROOT / "atm_standard.csv").items())
-COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b", "#e377c2", "#17becf"]
-RED = {"color": "#c22b2b", "fontWeight": 600}
+# Validated categorical palette (dataviz skill, references/palette.md), in its fixed order: targets
+# take the first slots, interferers the next ones. Dark mode has its own steps of the same hues.
+SERIES_LIGHT = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
+SERIES_DARK = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"]
+INK_LIGHT = dict(primary="#0b0b0b", secondary="#52514e", muted="#898781", grid="#e1e0d9", axis="#c3c2b7",
+                 surface="#fcfcfb")
+INK_DARK = dict(primary="#f0efec", secondary="#c3c2b7", muted="#898781", grid="#2c2c2a", axis="#383835",
+                surface="#1a1a19")
+RED = {"color": "var(--critical)", "fontWeight": 600}  # out of range: the status color, never a series
+# Table colors as props, not CSS: Dash's own table CSS outranks a stylesheet, and these inline
+# styles still give way to style_data_conditional (red values, the selected row). Borders are
+# in style.css: Dash merges a border prop badly with the per-column alignment.
+TABLE_COLORS = dict(
+    style_header={"backgroundColor": "var(--surface-2)", "color": "var(--text-2)", "fontWeight": 600},
+    style_data={"backgroundColor": "var(--surface)", "color": "var(--text)"},
+    style_cell={"textAlign": "left"},  # right-aligned, a dropdown's arrow covered the value
+)
+# Result tables: text left, numbers right (aligned digits, see style.css)
+RESULT_TABLE = dict(TABLE_COLORS, style_table={"overflowX": "auto"},
+                    style_cell={"textAlign": "left", "padding": "6px 12px", "fontFamily": "inherit",
+                                "fontSize": "0.875rem"},
+                    style_cell_conditional=[{"if": {"column_type": "numeric"}, "textAlign": "right"}])
 
 
 @functools.cache
@@ -219,7 +239,7 @@ def targets_from_table(table: pd.DataFrame) -> tuple[list, list]:
 
 
 def number_input(key, label, value, min_value=None, max_value=None, step=None, format=None, help=None):
-    return html.Div([html.Label(label, title=help),
+    return html.Div([html.Label(label, title=help, className="field-label"),
                      dcc.Input(id=key, type="number", value=value, min=min_value, max=max_value, step="any",
                                debounce=True)], className="field")
 
@@ -261,111 +281,132 @@ server = app.server
 server.route("/health")(lambda: "ok")
 
 app.layout = html.Div([
-    dcc.Checklist([" Dark mode"], [], id="dark", className="theme-switch"),
+    html.Header([
+        html.Div([html.H1("SpectralFinder"),
+                  html.P("Spectral windows where several gases can be measured in one scan.", className="tagline")]),
+        dcc.Checklist([" Dark mode"], [], id="dark", className="theme-switch"),
+    ], className="page-head"),
 
     # ------------------------------------------------------------------ inputs ----
 
-    html.H1("SpectralFinder"),
-    html.P("Spectral windows where several gases can be measured in one scan.", className="caption"),
-
-    html.Div([
+    html.Section([
         html.Div([
-            html.H3("Gases to measure"),
+            html.Div([
+                html.H3("Gases to measure"),
+                dash_table.DataTable(
+                    pd.DataFrame([
+                        {"molecule": "CH4", "concentration": 10.0, "unit": "ppm", "isotope": 1},
+                        {"molecule": "N2O", "concentration": 1.0, "unit": "ppm", "isotope": 1},
+                        {"molecule": "H2O", "concentration": 30.0, "unit": "%", "isotope": 1},
+                    ]).to_dict("records"),
+                    editable=True, row_deletable=True, id="gases",
+                    columns=[
+                        {"name": "molecule", "id": "molecule", "presentation": "dropdown"},
+                        {"name": "concentration", "id": "concentration", "type": "numeric"},
+                        {"name": "unit", "id": "unit", "presentation": "dropdown"},
+                        {"name": "isotope", "id": "isotope", "type": "numeric"},
+                    ],
+                    dropdown={
+                        "molecule": {"options": [{"label": n, "value": n} for n in sorted(NAME_TO_ID)],
+                                     "clearable": False},
+                        "unit": {"options": [{"label": u, "value": u} for u in UNITS], "clearable": False},
+                    },
+                    tooltip_header={"isotope": "1 = main isotopologue; e.g. CH4: 2 = ¹³CH4, H2O: 4 = HDO"},
+                    style_table={"overflowX": "auto"}, **TABLE_COLORS,
+                ),
+                html.Button("+ Add gas", id="add", className="ghost"),
+            ], className="group"),
+
+            html.Div([
+                html.H3("Instrument"),
+                html.Div([
+                    number_input("L_km", "Effective L (km)", value=7.5, min_value=1e-5, format="%g",
+                                 help="L = c·τ (ringdown)"),
+                    number_input("delta_sigma", "Scan width (cm⁻¹)", value=0.55, min_value=0.01, step=0.05,
+                                 format="%g"),
+                    number_input("P_mbar", "Pressure (mbar)", value=30.0, min_value=0.01, format="%g"),
+                    number_input("T_C", "Temperature (°C)", value=40.0, format="%g"),
+                ], className="pair"),
+            ], className="group"),
+
+            html.Div([
+                html.H3("Search"),
+                html.Div([
+                    number_input("sigma_min", "From (cm⁻¹)", value=4394.65, format="%g"),
+                    number_input("sigma_max", "To (cm⁻¹)", value=4401.65, format="%g",
+                                 help="the full 2000–9000 cm⁻¹ range: ~2 min"),
+                    number_input("min_abs", "Min. absorption (%)", value=1.0, min_value=0.01, format="%g",
+                                 help="detection limit: required SNR / spectrum SNR (10 / 1000)"),
+                    number_input("max_abs", "Max. absorption (%)", value=20.0, min_value=0.1, max_value=99.0,
+                                 format="%g"),
+                    number_input("interference_max", "Max. interference (%)", value=5.0, min_value=0.1,
+                                 format="%g"),
+                    dcc.Checklist([{"label": " Background gases", "value": "on"}], ["on"], id="with_background",
+                                  className="field check"),
+                ], className="pair"),
+            ], className="group"),
+        ], className="columns"),
+
+        html.Details([
+            html.Summary("Edit background gases"),
+            html.P("Interferers checked in every window, at these concentrations -- by default a standard "
+                   "atmosphere (atm_standard.csv). A gas that is also measured takes the concentration given "
+                   "above instead.", className="caption"),
             dash_table.DataTable(
-                pd.DataFrame([
-                    {"molecule": "CH4", "concentration": 10.0, "unit": "ppm", "isotope": 1},
-                    {"molecule": "N2O", "concentration": 1.0, "unit": "ppm", "isotope": 1},
-                    {"molecule": "H2O", "concentration": 30.0, "unit": "%", "isotope": 1},
-                ]).to_dict("records"),
-                editable=True, row_deletable=True, id="gases",
+                background_rows(STANDARD_BACKGROUND), id="background", editable=True, row_deletable=True,
                 columns=[
                     {"name": "molecule", "id": "molecule", "presentation": "dropdown"},
                     {"name": "concentration", "id": "concentration", "type": "numeric"},
                     {"name": "unit", "id": "unit", "presentation": "dropdown"},
-                    {"name": "isotope", "id": "isotope", "type": "numeric"},
                 ],
                 dropdown={
-                    "molecule": {"options": [{"label": n, "value": n} for n in sorted(NAME_TO_ID)], "clearable": False},
-                    "unit": {"options": [{"label": u, "value": u} for u in UNITS], "clearable": False},
+                    "molecule": {"options": [{"label": n, "value": n} for n in sorted(NAME_TO_ID)],
+                                 "clearable": False},
+                    "unit": {"options": [{"label": u, "value": u} for u in BACKGROUND_UNITS], "clearable": False},
                 },
-                tooltip_header={"isotope": "1 = main isotopologue; e.g. CH4: 2 = ¹³CH4, H2O: 4 = HDO"},
+                style_table={"maxHeight": "22rem", "overflowY": "auto"}, **TABLE_COLORS,
             ),
-            html.Button("+", id="add", className="add"),
-        ]),
+            html.Div([html.Button("+ Add gas", id="add-background", className="ghost"),
+                      html.Button("Reset to standard", id="reset-background", className="ghost")],
+                     className="actions"),
+        ], className="background-box"),
 
+        html.Div(id="errors"),
         html.Div([
-            html.H3("Instrument"),
-            html.Div([
-                number_input("L_km", "Effective L (km)", value=7.5, min_value=1e-5, format="%g", help="L = c·τ (ringdown)"),
-                number_input("delta_sigma", "Scan width (cm⁻¹)", value=0.55, min_value=0.01, step=0.05, format="%g"),
-                number_input("P_mbar", "Pressure (mbar)", value=30.0, min_value=0.01, format="%g"),
-                number_input("T_C", "Temperature (°C)", value=40.0, format="%g"),
-            ], className="pair"),
-        ]),
-
-        html.Div([
-            html.H3("Search"),
-            html.Div([
-                number_input("sigma_min", "From (cm⁻¹)", value=4394.65, format="%g"),
-                number_input("sigma_max", "To (cm⁻¹)", value=4401.65, format="%g",
-                             help="the full 2000–9000 cm⁻¹ range: ~2 min"),
-                number_input("min_abs", "Min. absorption (%)", value=1.0, min_value=0.01, format="%g",
-                             help="detection limit: required SNR / spectrum SNR (10 / 1000)"),
-                number_input("max_abs", "Max. absorption (%)", value=20.0, min_value=0.1, max_value=99.0, format="%g"),
-                number_input("interference_max", "Max. interference (%)", value=5.0, min_value=0.1, format="%g"),
-                dcc.Checklist([{"label": " Background gases", "value": "on"}], ["on"], id="with_background",
-                              className="field"),
-            ], className="pair"),
-        ]),
-    ], className="columns"),
-
-    html.Details([
-        html.Summary("Edit background gases"),
-        html.P("Interferers checked in every window, at these concentrations -- by default a standard "
-               "atmosphere (atm_standard.csv). A gas that is also measured takes the concentration given "
-               "above instead.", className="caption"),
-        dash_table.DataTable(
-            background_rows(STANDARD_BACKGROUND), id="background", editable=True, row_deletable=True,
-            columns=[
-                {"name": "molecule", "id": "molecule", "presentation": "dropdown"},
-                {"name": "concentration", "id": "concentration", "type": "numeric"},
-                {"name": "unit", "id": "unit", "presentation": "dropdown"},
-            ],
-            dropdown={
-                "molecule": {"options": [{"label": n, "value": n} for n in sorted(NAME_TO_ID)], "clearable": False},
-                "unit": {"options": [{"label": u, "value": u} for u in BACKGROUND_UNITS], "clearable": False},
-            },
-            style_table={"maxHeight": "22rem", "overflowY": "auto"},
-        ),
-        html.Div([html.Button("+", id="add-background", className="add"),
-                  html.Button("Reset to standard", id="reset-background", className="secondary")],
-                 className="actions"),
-    ], className="background-box"),
-
-    html.Div(id="errors"),
-    html.Button("Run search", id="go", className="primary"),
-    dcc.Upload("Open a saved simulation (.json)", id="open", accept=".json,application/json",
-               max_size=MAX_UPLOAD_MB * 1024 * 1024, className="upload"),
-    html.Div(id="open-error"),
+            html.Button("Run search", id="go", className="primary"),
+            dcc.Upload(html.Span("Open saved simulation…", className="secondary"), id="open",
+                       accept=".json,application/json", max_size=MAX_UPLOAD_MB * 1024 * 1024, className="upload"),
+        ], className="run-row"),
+        html.Div(id="open-error"),
+    ], className="card", **{"aria-label": "Parameters"}),
     dcc.Store(id="run"),
 
     # ------------------------------------------------------------------ results ----
 
     dcc.Loading([
         html.Div(id="search-error"),
-        html.Div(id="results"),
-        html.Div([
-            html.Button("Save simulation", id="save", className="secondary",
-                        title="parameters and results, to reopen here later"),
-            html.Button("Tables (CSV)", id="save-csv", className="secondary",
-                        title="windows, interferers, temperature, other lines, gases to watch"),
-            dcc.Download(id="download"),
-        ], id="actions", className="actions", hidden=True),
-        html.Div([html.Label("Window detail"), dcc.Dropdown(id="choice", clearable=False)], id="choice-box"),
-        html.Div(id="detail"),
-    ]),
+        html.Section([
+            html.Div([
+                html.H2("Results"),
+                html.Div([
+                    html.Button("Save simulation", id="save", className="secondary",
+                                title="parameters and results, to reopen here later"),
+                    html.Button("Tables (CSV)", id="save-csv", className="secondary",
+                                title="windows, interferers, temperature, other lines, gases to watch"),
+                    dcc.Download(id="download"),
+                ], className="actions"),
+            ], className="section-head"),
+            html.Div(id="summary"),
+            html.Div([
+                dash_table.DataTable(id="windows", data=[], columns=[], selected_rows=[0], **RESULT_TABLE),
+                html.P("Click a window to see its spectrum. Absorption of each gas at its peak; "
+                       "in red: outside the target range.", className="caption"),
+            ], id="windows-box"),
+            html.Div(id="detail"),
+        ], id="results-section", className="card", hidden=True),
+    ], type="dot", color="var(--accent)"),
     footer(),
-])
+], className="page")
 
 # dark mode follows the system setting, like Streamlit did; the switch toggles it in the browser
 app.clientside_callback("() => matchMedia('(prefers-color-scheme: dark)').matches ? [' Dark mode'] : []",
@@ -476,125 +517,171 @@ def download(_, __, run):
     return dcc.send_bytes(csv_zip(r["result"], r["background"]), f"{file_name(r)}_csv.zip", type="application/zip")
 
 
-@app.callback(Output("results", "children"), Output("choice", "options"), Output("choice", "value"),
-              Output("choice-box", "hidden"), Output("detail", "children"), Output("actions", "hidden"),
-              Input("run", "data"), Input("choice", "value"), Input("dark", "value"))
-def results(run, choice, dark):
+def numeric(col: str, decimals: int) -> dict:
+    return {"name": col, "id": col, "type": "numeric", "format": Format(precision=decimals, scheme=Scheme.fixed)}
+
+
+@app.callback(Output("summary", "children"), Output("windows", "data"), Output("windows", "columns"),
+              Output("windows", "style_data_conditional"), Output("windows", "selected_rows"),
+              Output("windows-box", "hidden"), Output("detail", "children"), Output("results-section", "hidden"),
+              # the clicked cell is cleared right away: the whole row is highlighted instead
+              Output("windows", "active_cell"), Output("windows", "selected_cells"),
+              Input("run", "data"), Input("windows", "active_cell"), Input("dark", "value"),
+              State("windows", "selected_rows"))
+def results(run, cell, dark, selected):
+    return _results(run, cell, dark, selected) + (None, [])
+
+
+def _results(run, cell, dark, selected) -> tuple:
     if run is None:
-        return [], [], None, True, [], True
+        return [], [], [], [], [0], True, [], True
 
     # the browser only keeps the search inputs (dcc.Store); the result comes back from run_search's
     # cache, or from the opened simulations
     r = load_run(run)
     if r is None:
         return ([html.Div("This simulation is no longer in the server's memory: open the file again.",
-                          className="warning")], [], None, True, [], True)
-    result = r["result"]
+                          className="warning")], [], [], [], [0], True, [], False)
+    result, config = r["result"], r["config"]
     labels = [TargetSpecies(n, x, iso).label for n, x, iso in r["targets"]]
-    color = {n: COLORS[i % len(COLORS)] for i, n in enumerate(labels)}
+    palette = SERIES_DARK if dark else SERIES_LIGHT
+    color = {n: palette[i % len(palette)] for i, n in enumerate(labels)}
 
-    out = [html.Hr()]
+    summary = []
     if r["source"]:  # the form above still shows its own values, not the file's
-        out.append(html.Div([html.B(f"Opened from {r['source']}"), f": {describe(r)}"],
-                            className="info"))
-    dropped = result.n_rejected_interference
-    out.append(dcc.Markdown(f"**{len(result.windows)} window{'s' * (len(result.windows) != 1)}**"
-                            + (f" · {dropped} dropped for interference" if dropped else "")
-                            + (f" · {r['elapsed']:.0f} s" if r["elapsed"] is not None else "")))
+        summary.append(html.Div([html.B(f"Opened from {r['source']}"), f": {describe(r)}"], className="info"))
+    n, dropped = len(result.windows), result.n_rejected_interference
+    stats = [html.Span([html.B(n), f" window{'s' * (n != 1)}"], className="stat")]
+    if dropped:
+        stats.append(html.Span([html.B(dropped), " dropped for interference"], className="stat"))
+    if r["elapsed"] is not None and r["elapsed"] >= 1:
+        stats.append(html.Span([html.B(f"{r['elapsed']:.0f} s")], className="stat"))
+    summary.append(html.Div(stats, className="stats"))
     background_note = describe_background(r["background"])
     if not r["source"] and not background_note.startswith("standard"):  # the banner already says it
-        out.append(html.P(background_note[0].upper() + background_note[1:], className="caption"))
+        summary.append(html.P(background_note[0].upper() + background_note[1:], className="caption"))
     if not result.windows:
-        out.append(html.Div("No window meets the criteria: try another spectral range or a higher "
-                            "interference limit.", className="warning"))
-        return out, [], None, True, [], False
+        summary.append(html.Div("No window meets the criteria: try another spectral range or a higher "
+                                "interference limit.", className="warning"))
+        return summary, [], [], [], [0], True, [], False
 
-    rows, css = [], []
-    for i, c in enumerate(result.windows, 1):
-        row, style = {"#": i, "center (cm⁻¹)": round(c.center, 3), "λ (nm)": round(1e7 / c.center, 2)}, {}
-        for n in labels:
-            row[f"{n} (%)"] = round(100 * (1 - c.transmission[n]), 2)
-            if not c.transmission_ok[n]:
-                style[f"{n} (%)"] = RED
-        row["max. interference (%)"] = round(100 * max(c.interference.values()), 2)
+    # a new search goes back to the first window; a click selects the clicked one
+    if ctx.triggered_id == "run":
+        choice = 0
+    elif ctx.triggered_id == "windows" and cell:
+        choice = cell["row"]
+    else:
+        choice = (selected or [0])[0]
+    choice = min(choice, n - 1)
+
+    rows, red = [], []
+    for i, c in enumerate(result.windows):
+        row = {"#": i + 1, "center (cm⁻¹)": c.center, "λ (nm)": 1e7 / c.center}
+        for g in labels:
+            row[f"{g} (%)"] = 100 * (1 - c.transmission[g])
+            if not c.transmission_ok[g]:
+                red.append({"if": {"row_index": i, "column_id": f"{g} (%)"}, **RED})
+        row["max. interference (%)"] = 100 * max(c.interference.values())
         rows.append(row)
-        css.append(style)
-    table = pd.DataFrame(rows)
-    out.append(dash_table.DataTable(table.to_dict("records"), style_data_conditional=[
-        {"if": {"row_index": i, "column_id": col}, **red} for i, s in enumerate(css) for col, red in s.items()],
-        columns=[{"name": col, "id": col, "type": "numeric", "format": Format(precision=3 if col.startswith("center") else 2,
-                  scheme=Scheme.fixed) if col != "#" else Format()} for col in table.columns]))
-    out.append(html.P("Absorption of each gas at its peak; in red: outside the target range.", className="caption"))
+    columns = ([{"name": "#", "id": "#"}, numeric("center (cm⁻¹)", 3), numeric("λ (nm)", 2)]
+               + [numeric(f"{g} (%)", 2) for g in labels] + [numeric("max. interference (%)", 2)])
+    styles = [{"if": {"row_index": choice}, "backgroundColor": "var(--selected)", "fontWeight": 600}] + red
 
-    # a new search goes back to the first window
-    choice = choice if ctx.triggered_id != "run" and choice is not None else 0
-    options = [{"label": f"#{i + 1} · {result.windows[i].center:.3f} cm⁻¹", "value": i} for i in range(len(result.windows))]
+    return (summary, rows, columns, styles, [choice], False,
+            window_detail(result, choice, labels, color, config, bool(dark)), False)
+
+
+def window_detail(result, choice: int, labels: list, color: dict, config, dark: bool) -> list:
     c = result.windows[choice]
     spectra, others = result.window_spectra[choice], result.interferer_spectra[choice]
+    ink = INK_DARK if dark else INK_LIGHT
 
     fig = go.Figure()
-    fig.add_vrect(x0=c.lo, x1=c.hi, fillcolor="rgba(46,125,79,0.07)", line_width=0)
-    # Interferers in the colors after the targets' (all grey, they couldn't be told apart)
+    # Interferers dashed, in the palette slots after the targets' (all grey, they couldn't be told apart)
+    palette = SERIES_DARK if dark else SERIES_LIGHT
     for j, itf in enumerate([i for i in c.interferers if i.label in others][:3]):
         grid, alpha = others[itf.label]
-        fig.add_trace(go.Scatter(x=grid, y=alpha, name=itf.label,
-                                 line=dict(color=COLORS[(len(labels) + j) % len(COLORS)], dash="dash"),
-                                 hovertemplate="%{x:.4f} cm⁻¹<br>α = %{y:.2e}<extra>" + itf.label + "</extra>"))
-    for n, (grid, alpha) in spectra.items():
-        fig.add_trace(go.Scatter(x=grid, y=alpha, name=n, line=dict(color=color[n], width=2.5),
-                                 hovertemplate="%{x:.4f} cm⁻¹<br>α = %{y:.2e}<extra>" + n + "</extra>"))
-        fig.add_trace(go.Scatter(x=[c.peak_position[n]], y=[c.peak_alpha[n]], mode="markers+text", showlegend=False,
-                                 marker=dict(symbol="circle-open", size=16, color=color[n], line=dict(width=3)),
-                                 text=[f"<b>{n}</b> {100 * (1 - c.transmission[n]):.1f} %"],
-                                 textposition="top center", textfont=dict(color=color[n]), hoverinfo="skip"))
-    for p in c.extra_peaks:  # other lines in the absorption range: smaller circle
-        fig.add_trace(go.Scatter(x=[p.position], y=[p.alpha], mode="markers+text", showlegend=False,
-                                 marker=dict(symbol="circle-open", size=10, color=color[p.species], line=dict(width=2)),
-                                 text=[f"{100 * (1 - p.transmission):.1f} %"], textposition="top center",
-                                 textfont=dict(color=color[p.species], size=11), hoverinfo="skip"))
-    fig.update_yaxes(type="log", title="α (cm⁻¹)", exponentformat="power", dtick=1)  # decades only
-    fig.update_xaxes(title="wavenumber (cm⁻¹)", tickformat=".2f")
-    fig.update_layout(height=460, margin=dict(t=10, b=40), legend=dict(orientation="h", y=-0.2),
-                      template="plotly_dark" if dark else "plotly_white", paper_bgcolor="rgba(0,0,0,0)")
-    detail = [dcc.Graph(figure=fig)]
+        fig.add_trace(go.Scatter(x=grid, y=alpha, name=f"{itf.label} (interferer)",
+                                 line=dict(color=palette[(len(labels) + j) % len(palette)], dash="dash", width=1.5),
+                                 hovertemplate="α = %{y:.2e}"))
+    for g, (grid, alpha) in spectra.items():
+        fig.add_trace(go.Scatter(x=grid, y=alpha, name=g, line=dict(color=color[g], width=2),
+                                 hovertemplate="α = %{y:.2e}"))
+    # selected peaks: a ring in the gas's color, the label in ink (text never wears the series color)
+    peaks = [(g, c.peak_position[g], c.peak_alpha[g], c.transmission[g], 14) for g in labels]
+    peaks += [(p.species, p.position, p.alpha, p.transmission, 9) for p in c.extra_peaks]
+    for g, pos, a, tr, size in peaks:
+        main = size == 14
+        fig.add_trace(go.Scatter(
+            x=[pos], y=[a], mode="markers+text", showlegend=False, hoverinfo="skip", cliponaxis=False,
+            marker=dict(symbol="circle-open", size=size, color=color[g], line=dict(width=2.5 if main else 2)),
+            text=[f"<b>{g}</b> {100 * (1 - tr):.1f} %" if main else f"{100 * (1 - tr):.1f} %"],
+            textposition="top center", textfont=dict(color=ink["primary"] if main else ink["secondary"],
+                                                     size=12 if main else 11)))
+    fig.update_yaxes(type="log", title="α (cm⁻¹)", exponentformat="power", dtick=1,  # decades only
+                     gridcolor=ink["grid"], linecolor=ink["axis"], tickfont=dict(color=ink["muted"]))
+    fig.update_xaxes(title="wavenumber (cm⁻¹)", tickformat=".2f", range=[c.lo, c.hi], showspikes=True,
+                     spikemode="across", spikethickness=1, spikedash="solid", spikecolor=ink["muted"],
+                     gridcolor=ink["grid"], linecolor=ink["axis"], tickfont=dict(color=ink["muted"]))
+    fig.update_layout(height=440, margin=dict(t=48, b=50, l=60, r=48), hovermode="x unified",
+                      legend=dict(orientation="h", x=0, y=1.02, yanchor="bottom", font=dict(color=ink["secondary"])),
+                      font=dict(family="system-ui, -apple-system, Segoe UI, sans-serif", color=ink["secondary"]),
+                      template="plotly_dark" if dark else "plotly_white",
+                      paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor=ink["surface"],
+                      hoverlabel=dict(bgcolor=ink["surface"], font=dict(color=ink["primary"])))
 
-    details = pd.DataFrame([{
-        "gas": n, "peak (cm⁻¹)": round(c.peak_position[n], 4),
-        "absorption (%)": round(100 * (1 - c.transmission[n]), 2),
-        "interference (%)": round(100 * c.interference.get(n, float("nan")), 2),
-        "main interferer": c.main_interferer.get(n) or "–",
-        "T (%/K)": round(c.temperature_coeff.get(n, float("nan")), 2),
-    } for n in labels] + [{
-        "gas": f"{p.species} (other line)", "peak (cm⁻¹)": round(p.position, 4),
-        "absorption (%)": round(100 * (1 - p.transmission), 2),
-        "interference (%)": round(100 * p.interference, 2),
-        "main interferer": "–",
-        "T (%/K)": round(p.temperature_coeff, 2),
-    } for p in c.extra_peaks])
-    detail.append(dash_table.DataTable(details.to_dict("records"), [{"name": col, "id": col} for col in details.columns]))
+    detail = [html.H3(f"Window #{choice + 1} · {c.center:.3f} cm⁻¹ · {1e7 / c.center:.2f} nm",
+                      className="window-title"),
+              dcc.Graph(figure=fig, config={"displaylogo": False, "responsive": True}, className="graph")]
+
+    gas_rows, red = [], []
+    for i, g in enumerate(labels):
+        gas_rows.append({"gas": g, "peak (cm⁻¹)": c.peak_position[g], "absorption (%)": 100 * (1 - c.transmission[g]),
+                         "interference (%)": 100 * c.interference.get(g, float("nan")),
+                         "main interferer": c.main_interferer.get(g) or "–",
+                         "T (%/K)": c.temperature_coeff.get(g, float("nan"))})
+        if not c.transmission_ok[g]:
+            red.append({"if": {"row_index": i, "column_id": "absorption (%)"}, **RED})
+    for p in c.extra_peaks:  # in the absorption range by construction
+        gas_rows.append({"gas": f"{p.species} (other line)", "peak (cm⁻¹)": p.position,
+                         "absorption (%)": 100 * (1 - p.transmission), "interference (%)": 100 * p.interference,
+                         "main interferer": "–", "T (%/K)": p.temperature_coeff})
+    for i, row in enumerate(gas_rows):
+        if row["interference (%)"] > 100 * config.interference_max:
+            red.append({"if": {"row_index": i, "column_id": "interference (%)"}, **RED})
+    detail.append(dash_table.DataTable(
+        gas_rows, [{"name": "gas", "id": "gas"}, numeric("peak (cm⁻¹)", 4), numeric("absorption (%)", 2),
+                   numeric("interference (%)", 2), {"name": "main interferer", "id": "main interferer"},
+                   numeric("T (%/K)", 2)],
+        style_data_conditional=red, **RESULT_TABLE))
+    notes = []
     if c.extra_peaks:
-        detail.append(html.P("other line: another peak of the same gas in the window, also inside the absorption range "
-                             "(small circle) -- listed for its temperature dependence.", className="caption"))
-    for pair, k in c.ratio_temperature_coeff.items():
-        detail.append(html.P(f"Ratio {pair}: {k:+.3f} %/K → {1e3 * c.ratio_temperature_error[pair]:.2g} ‰ for "
-                             f"±{r['config'].temperature_stability_K:g} K",
-                             className="caption"))
+        notes.append("Other line: another peak of the same gas in the window, also inside the absorption range "
+                     "(small ring) -- listed for its temperature dependence.")
+    notes += [f"Ratio {pair}: {k:+.3f} %/K → {1e3 * c.ratio_temperature_error[pair]:.2g} ‰ for "
+              f"±{config.temperature_stability_K:g} K" for pair, k in c.ratio_temperature_coeff.items()]
+    detail += [html.P(t, className="caption") for t in notes]
 
     if c.background_limits:
         shown = c.background_limits[:5]
-        limits = pd.DataFrame([{
-            "gas": b.molecule, "standard": conc(b.mole_fraction), "limit": conc(b.max_mole_fraction),
-            "× standard": f"{b.factor:.2g}", "disturbs": b.target,
-        } for b in shown])
-        detail.append(html.H4("Background gases to watch"))
+        detail.append(html.H3("Background gases to watch"))
         detail.append(dash_table.DataTable(
-            limits.to_dict("records"), [{"name": col, "id": col} for col in limits.columns],
+            [{"gas": b.molecule, "standard": conc(b.mole_fraction), "limit": conc(b.max_mole_fraction),
+              "× standard": times(b.factor), "disturbs": b.target} for b in shown],
+            [{"name": col, "id": col} for col in ("gas", "standard", "limit", "× standard", "disturbs")],
+            **dict(RESULT_TABLE, style_cell_conditional=[{"if": {"column_id": col}, "textAlign": "right"}
+                                                         for col in ("standard", "limit", "× standard")]),
             style_data_conditional=[{"if": {"row_index": i, "column_id": "limit"}, **RED}
                                     for i, b in enumerate(shown) if b.factor < 10]))
         detail.append(html.P(f"Above its limit, the interference on the measured gas exceeds "
-                             f"{100 * r['config'].interference_max:g} % and the window fails; in red: "
+                             f"{100 * config.interference_max:g} % and the window fails; in red: "
                              "less than 10× the standard concentration.", className="caption"))
-    return out, options, choice, False, detail, False
+    return detail
+
+
+def times(factor: float) -> str:
+    """'×2,600' -- 2 significant digits, thousands separated, instead of '2.6e+03'."""
+    return f"×{float(f'{factor:.2g}'):,.0f}" if factor >= 10 else f"×{factor:.2g}"
 
 
 # A search worker (spawn) re-imports this file as __mp_main__ and must not start
