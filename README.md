@@ -10,13 +10,22 @@ line-by-line [HITRAN](https://hitran.org) data via [HAPI](https://hitran.org/hap
 SpectralFinder is developed independently at EPFL; it is not developed,
 maintained or endorsed by the HITRAN team.
 
-## Data and citation
+## Citation
+
+If you use SpectralFinder, please cite it:
+
+> Bruttin, L., Grilli, R., Chappellaz, J., & Thomas, E. (2026). *SpectralFinder* (version 1.2.0)
+> [Software]. https://github.com/SENSE-EPFL/spectralfinder
+
+The DOI will be added here with the first release archived on Zenodo. The same
+reference is in `CITATION.cff` (GitHub's "Cite this repository" button reads it).
+
+## Data
 
 Line data are downloaded from HITRANonline and cached locally (`data/`, see
 `hitran_tool/lines.py`), with their retrieval date. HITRAN is updated
 continuously, also between editions, so results can change with the data
-version: report the retrieval date with them. If you use this tool, please cite
-HITRAN and HAPI:
+version: report the retrieval date with them. Please also cite HITRAN and HAPI:
 
 - I. E. Gordon, L. S. Rothman, R. J. Hargreaves et al., *The HITRAN2024 molecular
   spectroscopic database*, J. Quant. Spectrosc. Radiat. Transfer 353, 109807 (2026),

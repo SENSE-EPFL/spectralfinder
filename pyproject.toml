@@ -1,6 +1,6 @@
 [project]
 name = "projet-semestre"
-version = "1.1.0"
+version = "1.2.0"
 description = "SpectralFinder: spectral-window selector for simultaneous multi-gas detection, using HITRAN data via HAPI"
 readme = "README.md"
 requires-python = ">=3.13"

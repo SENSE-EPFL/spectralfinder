@@ -1,0 +1,72 @@
+cff-version: 1.2.0
+message: "If you use SpectralFinder, please cite it as below, together with HITRAN and HAPI (see references)."
+title: SpectralFinder
+abstract: >-
+  Finds the spectral windows where several gases (and isotopologues) can be measured
+  simultaneously in a single laser scan, from HITRAN line-by-line data computed with HAPI:
+  absorption at the instrument's path length, pressure and temperature, separation of the
+  lines, interference from background gases, and temperature sensitivity.
+type: software
+authors:
+  - family-names: Bruttin
+    given-names: Léan
+    affiliation: "SENSE laboratory, École Polytechnique Fédérale de Lausanne (EPFL), Switzerland"
+  - family-names: Grilli
+    given-names: Roberto
+    affiliation: "Univ. Grenoble Alpes, CNRS, IRD, Grenoble INP, INRAE, IGE, Grenoble, France"
+    orcid: "https://orcid.org/0000-0001-5636-264X"
+  - family-names: Chappellaz
+    given-names: Jérôme
+    affiliation: "SENSE laboratory, École Polytechnique Fédérale de Lausanne (EPFL), Switzerland"
+    orcid: "https://orcid.org/0000-0002-9117-2961"
+  - family-names: Thomas
+    given-names: E.
+    affiliation: "École Polytechnique fédérale de Lausanne, EPFL Valais Wallis, Sion, 1951, Switzerland"
+    orcid: "https://orcid.org/0000-0001-7564-4116"
+repository-code: "https://github.com/SENSE-EPFL/spectralfinder"
+url: "https://spectralfinder.epfl.ch"
+keywords:
+  - spectroscopy
+  - HITRAN
+  - laser absorption spectroscopy
+  - spectral window selection
+  - isotopologues
+  - trace gases
+version: 1.2.0
+references:
+  - type: article
+    title: The HITRAN2024 molecular spectroscopic database
+    authors:
+      - family-names: Gordon
+        given-names: I. E.
+      - family-names: Rothman
+        given-names: L. S.
+      - family-names: Hargreaves
+        given-names: R. J.
+      - name: et al.
+    journal: Journal of Quantitative Spectroscopy and Radiative Transfer
+    volume: 353
+    start: 109807
+    year: 2026
+    doi: 10.1016/j.jqsrt.2026.109807
+  - type: article
+    title: "HITRAN Application Programming Interface (HAPI): A comprehensive approach to working with spectroscopic data"
+    authors:
+      - family-names: Kochanov
+        given-names: R. V.
+      - family-names: Gordon
+        given-names: I. E.
+      - family-names: Rothman
+        given-names: L. S.
+      - family-names: Wcisło
+        given-names: P.
+      - family-names: Hill
+        given-names: C.
+      - family-names: Wilzewski
+        given-names: J. S.
+    journal: Journal of Quantitative Spectroscopy and Radiative Transfer
+    volume: 177
+    start: 15
+    end: 30
+    year: 2016
+    doi: 10.1016/j.jqsrt.2016.03.005

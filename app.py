@@ -271,10 +271,18 @@ def isotope_dropdowns(rows: list) -> list:
     return out
 
 
-def number_input(key, label, value, min_value=None, max_value=None, step=None, format=None, help=None):
+def number_input(key, label, value, min_value=None, max_value=None, step=None, format=None, help=None,
+                 hint=False):
+    """hint: a line under the field, filled by a callback (id f"{key}-hint")."""
     return html.Div([html.Label(label, title=help, className="field-label"),
                      dcc.Input(id=key, type="number", value=value, min=min_value, max=max_value, step="any",
-                               debounce=True)], className="field")
+                               debounce=True)]
+                    + ([html.Div(id=f"{key}-hint", className="field-hint")] if hint else []), className="field")
+
+
+def micrometres(sigma) -> str:
+    """'= 2.2753 µm' under a wavenumber field, so nobody has to convert it by hand."""
+    return f"= {1e4 / sigma:.4f} µm" if isinstance(sigma, (int, float)) and sigma > 0 else ""
 
 
 FIELDS = ["L_km", "delta_sigma", "P_mbar", "T_C", "sigma_min", "sigma_max", "min_abs", "max_abs",
@@ -366,8 +374,8 @@ app.layout = html.Div([
             html.Div([
                 html.H3("Search"),
                 html.Div([
-                    number_input("sigma_min", "From (cm⁻¹)", value=4394.65, format="%g"),
-                    number_input("sigma_max", "To (cm⁻¹)", value=4401.65, format="%g",
+                    number_input("sigma_min", "From (cm⁻¹)", value=4394.65, format="%g", hint=True),
+                    number_input("sigma_max", "To (cm⁻¹)", value=4401.65, format="%g", hint=True,
                                  help="the full 2000–9000 cm⁻¹ range: ~2 min"),
                     number_input("min_abs", "Min. absorption (%)", value=1.0, min_value=0.01, format="%g",
                                  help="detection limit: required SNR / spectrum SNR (10 / 1000)"),
@@ -456,6 +464,12 @@ app.clientside_callback("() => matchMedia('(prefers-color-scheme: dark)').matche
                         Output("dark", "value"), Input("dark", "id"))
 app.clientside_callback("v => (document.documentElement.classList.toggle('dark', v.length > 0), 'theme-switch')",
                         Output("dark", "className"), Input("dark", "value"))
+
+
+@app.callback(Output("sigma_min-hint", "children"), Output("sigma_max-hint", "children"),
+              Input("sigma_min", "value"), Input("sigma_max", "value"))
+def wavelengths(sigma_min, sigma_max):
+    return micrometres(sigma_min), micrometres(sigma_max)
 
 
 @app.callback(Output("gases", "dropdown_data"), Input("gases", "data"))

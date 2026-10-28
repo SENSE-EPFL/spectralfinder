@@ -160,6 +160,13 @@ h3 {
     min-width: 0;
 }
 
+.field-hint {
+    margin-top: 0.2rem;
+    color: var(--sf-muted);
+    font-size: 0.8rem;
+    font-variant-numeric: tabular-nums;
+}
+
 .field-label {
     display: block;
     margin-bottom: 0.25rem;
