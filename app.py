@@ -274,7 +274,7 @@ def isotope_dropdowns(rows: list) -> list:
 def number_input(key, label, value, min_value=None, max_value=None, step=None, format=None, help=None,
                  hint=False):
     """hint: a line under the field, filled by a callback (id f"{key}-hint")."""
-    return html.Div([html.Label(label, title=help, className="field-label"),
+    return html.Div([html.Label(label, title=help, className="field-label", id=f"{key}-label"),
                      dcc.Input(id=key, type="number", value=value, min=min_value, max=max_value, step="any",
                                debounce=True)]
                     + ([html.Div(id=f"{key}-hint", className="field-hint")] if hint else []), className="field")
@@ -285,8 +285,24 @@ def micrometres(sigma) -> str:
     return f"= {1e4 / sigma:.4f} µm" if isinstance(sigma, (int, float)) and sigma > 0 else ""
 
 
+def wavenumbers(wavelength) -> str:
+    """'= 4394.65 cm⁻¹' under a wavelength field (µm)."""
+    return f"= {1e4 / wavelength:.2f} cm⁻¹" if isinstance(wavelength, (int, float)) and wavelength > 0 else ""
+
+
+def range_cm(start, end, unit: str) -> tuple:
+    """The search range in cm⁻¹ from the From / To fields, in cm⁻¹ or µm. In µm From is the
+    shorter wavelength, i.e. the higher wavenumber: σ = 10⁴ / λ swaps the ends. (None, None)
+    if a µm value isn't positive -- it has no wavenumber."""
+    if unit != "um":
+        return start, end
+    if not (isinstance(start, (int, float)) and isinstance(end, (int, float)) and start > 0 and end > 0):
+        return None, None
+    return 1e4 / end, 1e4 / start
+
+
 FIELDS = ["L_km", "delta_sigma", "P_mbar", "T_C", "sigma_min", "sigma_max", "min_abs", "max_abs",
-          "interference_max", "with_background"]
+          "interference_max", "with_background", "range_unit"]
 
 # Asked by the HITRAN team: cite HITRAN and HAPI, give the data's retrieval date (HITRAN is
 # updated continuously), and don't let this tool pass for official HITRAN software.
@@ -374,6 +390,9 @@ app.layout = html.Div([
             html.Div([
                 html.H3("Search"),
                 html.Div([
+                    dcc.RadioItems([{"label": " cm⁻¹", "value": "cm"}, {"label": " µm", "value": "um"}], "cm",
+                                   id="range_unit", inline=True, className="unit-switch field"),
+                    html.Div(className="field"),  # keeps From / To side by side below the switch
                     number_input("sigma_min", "From (cm⁻¹)", value=4394.65, format="%g", hint=True),
                     number_input("sigma_max", "To (cm⁻¹)", value=4401.65, format="%g", hint=True,
                                  help="the full 2000–9000 cm⁻¹ range: ~2 min"),
@@ -467,9 +486,27 @@ app.clientside_callback("v => (document.documentElement.classList.toggle('dark',
 
 
 @app.callback(Output("sigma_min-hint", "children"), Output("sigma_max-hint", "children"),
-              Input("sigma_min", "value"), Input("sigma_max", "value"))
-def wavelengths(sigma_min, sigma_max):
-    return micrometres(sigma_min), micrometres(sigma_max)
+              Input("sigma_min", "value"), Input("sigma_max", "value"), Input("range_unit", "value"))
+def wavelengths(start, end, unit):
+    """Under each range field, the same value in the other unit."""
+    other = wavenumbers if unit == "um" else micrometres
+    return other(start), other(end)
+
+
+@app.callback(Output("sigma_min", "value"), Output("sigma_max", "value"),
+              Output("sigma_min-label", "children"), Output("sigma_max-label", "children"),
+              Input("range_unit", "value"), State("sigma_min", "value"), State("sigma_max", "value"),
+              prevent_initial_call=True)
+def switch_range_unit(unit, start, end):
+    """Same range, in the other unit: From stays the smaller number (the ends swap)."""
+    symbol = "µm" if unit == "um" else "cm⁻¹"
+    labels = f"From ({symbol})", f"To ({symbol})"
+    if not all(isinstance(v, (int, float)) and v > 0 for v in (start, end)):
+        return no_update, no_update, *labels
+    # enough digits that switching back and forth gives the same numbers again
+    if unit == "um":
+        return round(1e4 / end, 7), round(1e4 / start, 7), *labels
+    return round(1e4 / end, 3), round(1e4 / start, 3), *labels
 
 
 @app.callback(Output("gases", "dropdown_data"), Input("gases", "data"))
@@ -500,8 +537,10 @@ def background_label(rows):
 
 
 def check(gases, background_table, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs,
-          interference_max, with_background):
-    """(targets, background or None if switched off, errors)."""
+          interference_max, with_background, range_unit="cm"):
+    """(targets, background or None if switched off, errors). sigma_min / sigma_max are the From / To
+    fields, in range_unit."""
+    sigma_min, sigma_max = range_cm(sigma_min, sigma_max, range_unit)
     targets, errors = targets_from_table(pd.DataFrame(gases))
     background = None
     if with_background:
@@ -527,11 +566,12 @@ def show_errors(*values):
               Input("go", "n_clicks"), State("gases", "data"), State("background", "data"),
               [State(f, "value") for f in FIELDS], prevent_initial_call=True)
 def search(_, gases, background_table, L_km, delta_sigma, P_mbar, T_C, sigma_min, sigma_max, min_abs, max_abs,
-           interference_max, with_background):
+           interference_max, with_background, range_unit):
     targets, background, errors = check(gases, background_table, L_km, delta_sigma, P_mbar, T_C, sigma_min,
-                                        sigma_max, min_abs, max_abs, interference_max, with_background)
+                                        sigma_max, min_abs, max_abs, interference_max, with_background, range_unit)
     if errors:
         return no_update, no_update
+    sigma_min, sigma_max = range_cm(sigma_min, sigma_max, range_unit)
     config = SearchConfig(
         sigma_min=float(sigma_min), sigma_max=float(sigma_max), L_cm=float(L_km) * 1e5,
         delta_sigma=float(delta_sigma), T=float(T_C) + 273.15, P=float(P_mbar) / 1013.25,

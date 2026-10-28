@@ -160,6 +160,11 @@ h3 {
     min-width: 0;
 }
 
+.unit-switch label {
+    margin-right: 1rem;
+    cursor: pointer;
+}
+
 .field-hint {
     margin-top: 0.2rem;
     color: var(--sf-muted);
