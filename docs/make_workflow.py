@@ -1,11 +1,16 @@
-"""Draw the window-selection workflow, with explanatory sketches, as
-docs/workflow.png and docs/workflow.pdf.
+"""Draw the window-selection method for the report, as two figures:
 
     uv run docs/make_workflow.py
 
-Written for a non-programmer reader (physics only, no code names). Text lives in
-BLOCKS below; keep it in sync with hitran_tool/windows.py. The sketches A-G are
-illustrative drawings (made-up line shapes), not computed from HITRAN.
+- docs/workflow.pdf / .png: the procedure step by step (inputs, stage 1, stage 2, ranking,
+  checks, output), each step tagged FILTER / RANK / REPORTED;
+- docs/workflow_criteria.pdf / .png: the sketches A-I those steps point to.
+
+Sized for an A4 report: drawn 6.3 in (16 cm) wide, the text width with 2.5 cm margins, so
+included at \\textwidth the text comes out at 7-8 pt. Written for a reader who knows the
+physics, not the code: keep the text in sync with hitran_tool/windows.py. The sketches are
+illustrations (made-up line shapes), not computed from HITRAN; docs/slides/make_figures.py
+draws them too.
 """
 from pathlib import Path
 
@@ -18,20 +23,70 @@ from matplotlib.font_manager import FontProperties
 from matplotlib.patches import FancyArrowPatch, FancyBboxPatch
 from matplotlib.textpath import TextPath
 
+matplotlib.rcParams["pdf.fonttype"] = 42  # real fonts in the PDF (selectable text), not Type 3 outlines
+
 OUT = Path(__file__).resolve().parent
 
-TAGS = {  # tag -> (label, color)
-    "filtre": ("FILTRE", "#c22b2b"),
-    "classement": ("CLASSEMENT", "#1f5fbf"),
-    "affiche": ("AFFICHÉ", "#6b6b6b"),
+INK, INK2, MUTED, GRID = "#1f1f1e", "#52514e", "#898781", "#d9d8d1"
+GOOD, RED = "#1a7d3a", "#c22b2b"  # ✓ / ✗ marks only; the text next to them stays in ink
+BAND = "#ecebe6"  # neutral shading: a window, the absorption range
+# Same hues, in the same order, as the web app's plots (app.py SERIES_LIGHT): measured gases first.
+GAS = {"CH4": "#2a78d6", "N2O": "#eb6834", "H2O": "#1baf7a"}
+LABEL = {"CH4": "CH₄", "N2O": "N₂O", "H2O": "H₂O"}
+OTHER = MUTED  # any other species
+TAGS = {  # tag -> (label, colour)
+    "filter": ("FILTER", "#c22b2b"),
+    "rank": ("RANK", "#1f5fbf"),
+    "reported": ("REPORTED", "#6b6b6b"),
 }
-GAS = {"CH4": "#1f77b4", "N2O": "#ff7f0e", "H2O": "#2ca02c"}
-GREY, RED, GOOD, WINDOW = "#7f7f7f", "#c22b2b", "#1a7d3a", "#2e7d4f"
-SMALL = 7.5  # font size inside the sketches
-TITLE = dict(fontsize=8.8, fontweight="bold", loc="left", pad=5)
+SMALL = 6.6  # font size inside the sketches (docs/slides/make_figures.py changes it)
 
 
-# ------------------------------------------------------------- sketches -----
+# ------------------------------------------------------------- helpers ------
+
+def _width_pt(text, size, bold=False):
+    """Width of `text` in points, in matplotlib's default font."""
+    path = TextPath((0, 0), text, size=size, prop=FontProperties(weight="bold" if bold else "normal"))
+    return path.get_extents().width
+
+
+def _title(ax, text):
+    ax.set_title(text, fontsize=SMALL + 1, fontweight="bold", loc="left", pad=4, color=INK)
+
+
+def _status(ax, xy, ok, text, ha="left", va="center"):
+    """A green ✓ or a red ✗, then `text` in ink, at data point xy; ha="center" centres the pair."""
+    icon = "✓" if ok else "✗"
+    gap = _width_pt(icon, SMALL, bold=True) + 0.35 * SMALL
+    width = gap + max(_width_pt(line, SMALL) for line in text.split("\n"))
+    shift = -width / 2 if ha == "center" else 0
+    common = dict(textcoords="offset points", ha="left", va=va, fontsize=SMALL)
+    ax.annotate(icon, xy, xytext=(shift, 0), color=GOOD if ok else RED, fontweight="bold", **common)
+    ax.annotate(text, xy, xytext=(shift + gap, 0), color=INK, **common)
+
+
+def _arrow(ax, start, end, colour=INK2):
+    ax.annotate("", end, start, arrowprops=dict(arrowstyle="->", color=colour, lw=0.8, shrinkA=1, shrinkB=2))
+
+
+def _frame(ax, xlabel="wavenumber →", ylabel="absorption"):
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_linewidth(0.7)
+        ax.spines[side].set_color(INK2)
+    ax.set_xticks([])
+    ax.set_yticks([])
+    ax.set_xlabel(xlabel, fontsize=SMALL, labelpad=2, color=INK2)
+    ax.set_ylabel(ylabel, fontsize=SMALL, labelpad=2, color=INK2)
+
+
+def _log_ticks(ax, axis, ticks, labels):
+    getattr(ax, f"set_{axis}ticks")(ticks)
+    getattr(ax, f"set_{axis}ticklabels")(labels, fontsize=SMALL - 0.4, color=INK2)
+    ax.tick_params(axis=axis, length=2, width=0.6, pad=1.5, color=INK2)
+    ax.minorticks_off()
+
 
 def gauss(x, x0, h, fwhm):
     return h * np.exp(-4 * np.log(2) * ((x - x0) / fwhm) ** 2)
@@ -41,343 +96,361 @@ def lorentz(x, x0, h, fwhm):
     return h / (1 + ((x - x0) / (fwhm / 2)) ** 2)
 
 
-def _frame(ax, xlabel="nombre d'onde →", ylabel="absorption"):
-    for side in ("top", "right"):
-        ax.spines[side].set_visible(False)
-    ax.set_xticks([])
-    ax.set_yticks([])
-    ax.set_xlabel(xlabel, fontsize=SMALL, labelpad=3)
-    ax.set_ylabel(ylabel, fontsize=SMALL, labelpad=3)
-
+# ------------------------------------------------------------- sketches -----
 
 def sketch_line_in_window(ax):
-    ax.set_title("A · une raie de chaque gaz ?", **TITLE)
+    _title(ax, "A · A line of every gas?")
     sticks = {  # the line list: one stick per HITRAN line (position, intensity)
         "CH4": ([1.2, 3.0, 6.1, 8.4], [0.55, 0.9, 0.5, 0.7]),
         "N2O": ([2.4, 5.3, 9.0], [0.5, 0.7, 0.45]),
         "H2O": ([1.8, 3.6, 7.0, 9.9], [0.8, 0.6, 0.85, 0.5]),
     }
-    for lo, hi, good, note in [(2.2, 3.8, True, "✓ gardée"), (7.6, 9.2, False, "✗ pas de H2O")]:
-        color = GOOD if good else RED
-        ax.axvspan(lo, hi, color=color, alpha=0.13, lw=0)
-        ax.text((lo + hi) / 2, 1.0, note, ha="center", va="bottom", fontsize=SMALL + 0.5,
-                color=color, fontweight="bold")
+    for lo, hi, ok, note in [(2.2, 3.8, True, "kept"), (7.6, 9.2, False, "no H₂O")]:
+        ax.axvspan(lo, hi, color=BAND, lw=0)
+        _status(ax, ((lo + hi) / 2, 1.0), ok, note, ha="center", va="bottom")
     for gas, (xs, hs) in sticks.items():
-        ax.vlines(xs, 0, hs, color=GAS[gas], lw=2.6, label=gas)
+        ax.vlines(xs, 0, hs, color=GAS[gas], lw=1.8, label=LABEL[gas])
     ax.set_xlim(0.5, 10.4)
-    ax.set_ylim(0, 1.55)
-    ax.legend(loc="upper center", ncol=3, fontsize=SMALL, frameon=False, handlelength=1.0,
-              columnspacing=1.4, borderaxespad=0.1)
-    _frame(ax, ylabel="intensité")
+    ax.set_ylim(0, 1.6)
+    ax.legend(loc="upper center", ncol=3, fontsize=SMALL, frameon=False, handlelength=0.9, handletextpad=0.4,
+              columnspacing=1.0, borderaxespad=0.0, labelcolor=INK)
+    _frame(ax, ylabel="line intensity")
 
 
 def sketch_separation(ax):
-    ax.set_title("B · raies assez séparées ?", **TITLE)
-    for (xa, xb, good, note), (lo, hi) in zip(
-            [(1.3, 3.6, True, "≥ 3 largeurs ✓"), (6.6, 7.5, False, "< 3 largeurs ✗")],
-            [(0.0, 4.9), (5.1, 10.0)]):
+    _title(ax, "B · Lines far enough apart?")
+    for (xa, xb, ok, note), (lo, hi) in zip(
+            [(1.3, 3.6, True, "≥ 3 FWHM"), (6.6, 7.5, False, "< 3 FWHM")], [(0.0, 4.9), (5.1, 10.0)]):
         x = np.linspace(lo, hi, 500)
         for x0, gas in [(xa, "CH4"), (xb, "N2O")]:
             y = gauss(x, x0, 1.0, 0.7)
-            ax.plot(x, y, color=GAS[gas], lw=1.8)
+            ax.plot(x, y, color=GAS[gas], lw=1.4)
             ax.fill_between(x, y, color=GAS[gas], alpha=0.15, lw=0)
-        ax.annotate("", (xa, 1.1), (xb, 1.1), arrowprops=dict(arrowstyle="<->", lw=1.1, color="k"))
-        ax.text((lo + hi) / 2, 1.27, note, ha="center", fontsize=SMALL + 0.5,
-                color=GOOD if good else RED, fontweight="bold")
-    ax.axvline(5.0, color="0.85", lw=1)
+        ax.annotate("", (xa, 1.12), (xb, 1.12),
+                    arrowprops=dict(arrowstyle="<->", lw=0.8, color=INK, shrinkA=0, shrinkB=0))
+        _status(ax, ((lo + hi) / 2, 1.25), ok, note, ha="center", va="bottom")
+    ax.axvline(5.0, color=GRID, lw=0.8)
     ax.set_xlim(0, 10)
-    ax.set_ylim(0, 1.5)
+    ax.set_ylim(0, 1.6)
     _frame(ax)
 
 
 def sketch_peak(ax):
-    ax.set_title("C · pic retenu = vrai sommet de la courbe", **TITLE)
+    _title(ax, "C · Peak: top of the curve")
     x = np.linspace(0.3, 10.0, 2000)
     lo, hi = 1.6, 8.0
     a, b = gauss(x, 4.0, 0.8, 0.9), gauss(x, 4.6, 0.7, 0.9)  # two lines of the same gas, blended
     total = a + b + lorentz(x, 8.8, 12.0, 0.6)  # + a strong line just outside the window
     inside = (x >= lo) & (x <= hi)
 
-    ax.axvspan(lo, hi, color=WINDOW, alpha=0.08, lw=0)
-    ax.text(lo + 0.1, 2.32, "fenêtre balayée par le laser", ha="left", va="top", fontsize=SMALL,
-            color=WINDOW, fontweight="bold")
-    ax.plot(x[inside], total[inside], color=GAS["CH4"], lw=2.2)
-    ax.plot(x[x >= hi], total[x >= hi], color=GAS["CH4"], lw=1.3, ls="--")
-    ax.plot(x[x <= lo], total[x <= lo], color=GAS["CH4"], lw=1.3, ls="--")
-    ax.vlines([4.0, 4.6], 0, [0.8, 0.7], color=GREY, lw=1.3, ls=":")
+    ax.axvspan(lo, hi, color=BAND, lw=0)
+    ax.text(lo + 0.15, 2.33, "scanned window", ha="left", va="top", fontsize=SMALL, color=INK2)
+    ax.plot(x[inside], total[inside], color=GAS["CH4"], lw=1.5)
+    ax.plot(x[x >= hi], total[x >= hi], color=GAS["CH4"], lw=1.0, ls="--")
+    ax.plot(x[x <= lo], total[x <= lo], color=GAS["CH4"], lw=1.0, ls="--")
+    ax.vlines([4.0, 4.6], 0, [0.8, 0.7], color=MUTED, lw=0.9, ls=":")  # the two blended lines
 
     k = int(np.argmax(np.where((x > 3) & (x < 5.5), total, 0)))
-    ax.plot(x[k], total[k], "o", ms=11, mfc="none", mec=GOOD, mew=2.2)
-    ax.annotate("✓ pic retenu : le sommet de la courbe\n(ici entre 2 raies, en pointillé)",
-                xy=(x[k] - 0.05, total[k] + 0.08), xytext=(0.45, 1.55), fontsize=SMALL, color=GOOD,
-                fontweight="bold", va="center",
-                arrowprops=dict(arrowstyle="->", color=GOOD, lw=1.1, relpos=(1, 0)))
+    ax.plot(x[k], total[k], "o", ms=7, mfc="none", mec=INK, mew=1.2)
+    _arrow(ax, (2.4, 1.75), (x[k] - 0.12, total[k] + 0.1))
+    _status(ax, (0.55, 1.92), True, "top of the curve")
 
+    # a maximum at the window's edge: the wing of the line outside, never used
     edge = float(np.interp(hi, x, total))
-    ax.plot(hi, edge, "x", ms=10, color=RED, mew=2.6)
-    ax.annotate("✗ plus haut au bord :\nl'aile d'une raie hors\nfenêtre → jamais pris",
-                xy=(hi - 0.06, edge + 0.04), xytext=(4.95, 1.95), fontsize=SMALL, color=RED,
-                fontweight="bold", va="center",
-                arrowprops=dict(arrowstyle="->", color=RED, lw=1.1, relpos=(1, 0)))
-    ax.text(9.12, 0.12, "raie forte\nhors fenêtre", fontsize=SMALL - 0.5, color=GREY, va="bottom")
+    ax.plot(hi, edge, "x", ms=6, color=RED, mew=1.6, clip_on=False)
+    ax.text(hi - 0.3, edge + 0.03, "edge", fontsize=SMALL, color=INK, ha="right", va="center")
     ax.set_xlim(0.3, 10.0)
     ax.set_ylim(0, 2.4)
     _frame(ax)
 
 
 def sketch_ranking(ax):
-    """Same reading as the other sketches: absorption up, wavenumber across. Each gas's
-    peak top must land in the horizontal band of the target range."""
-    ax.set_title("D · ni trop faible, ni trop fort : on vise 1 à 20 % d'absorption", **TITLE)
+    """Absorption up (log), wavenumber across: each gas's peak top must land in the band."""
+    _title(ax, "D · Absorption in the range?")
     x = np.linspace(0, 10, 1500)
     floor = 0.03  # % -- just a visual baseline on the log axis
     ax.set_yscale("log")
     ax.set_xlim(0, 10)
-    ax.set_ylim(floor * 0.8, 160)
-    ax.axhspan(1, 20, color=GOOD, alpha=0.13, lw=0)
-    ax.axhline(floor, color="0.75", lw=1)
-    ax.text(0.15, 4.5, "plage visée", fontsize=SMALL + 0.5, color=GOOD, fontweight="bold", va="center")
-    ax.text(0.15, 60, "trop fort", fontsize=SMALL, color=GREY, va="center")
-    ax.text(0.15, 0.12, "trop faible", fontsize=SMALL, color=GREY, va="center")
-    for gas, x0, top in [("CH4", 3.0, 8.0), ("N2O", 5.6, 0.3), ("H2O", 8.2, 45.0)]:
-        near = np.abs(x - x0) < 1.7
-        ax.plot(x[near], floor + gauss(x[near], x0, top, 0.55), color=GAS[gas], lw=2.2)
-        ax.plot(x0, top + floor, "o", ms=8, mfc="none", mec=GAS[gas], mew=2)
-    # CH4: top inside the band
-    ax.annotate("CH4", (3.0, 8), xytext=(0, 8), textcoords="offset points", ha="center", va="bottom",
-                fontsize=SMALL + 0.5, color=GAS["CH4"], fontweight="bold")
-    ax.text(3.3, 8, "✓ dans la plage", fontsize=SMALL, color=GOOD, va="center")
-    # N2O: top below the band -> gap up to 1 %
-    ax.annotate("", (5.6, 1.0), (5.6, 0.36), arrowprops=dict(arrowstyle="->", color=RED, lw=1.3))
-    ax.text(5.85, 0.33, "N2O", fontsize=SMALL + 0.5, color=GAS["N2O"], fontweight="bold", va="center")
-    ax.text(5.45, 0.62, "écart", fontsize=SMALL - 0.5, color=RED, ha="right", va="center")
-    # H2O: top above the band -> gap down to 20 %
-    ax.annotate("H2O", (8.2, 45), xytext=(0, 8), textcoords="offset points", ha="center", va="bottom",
-                fontsize=SMALL + 0.5, color=GAS["H2O"], fontweight="bold")
-    ax.annotate("", (8.2, 20), (8.2, 40), arrowprops=dict(arrowstyle="->", color=RED, lw=1.3))
-    ax.text(8.75, 30, "écart", fontsize=SMALL - 0.5, color=RED, va="center")
+    ax.set_ylim(floor * 0.8, 200)
+    ax.axhspan(1, 20, color=BAND, lw=0)
+    ax.text(0.2, 4.5, "range", fontsize=SMALL, color=INK, va="center", fontweight="bold")
+    ax.text(0.2, 60, "too strong", fontsize=SMALL, color=INK2, va="center")
+    ax.text(0.2, 0.15, "too weak", fontsize=SMALL, color=INK2, va="center")
+    for gas, x0, top in [("CH4", 4.0, 8.0), ("N2O", 6.3, 0.3), ("H2O", 8.6, 50.0)]:
+        near = np.abs(x - x0) < 1.2
+        ax.plot(x[near], floor + gauss(x[near], x0, top, 0.45), color=GAS[gas], lw=1.5)
+        ax.plot(x0, top + floor, "o", ms=5, mfc="none", mec=GAS[gas], mew=1.2)
+    ax.annotate("CH₄", (4.0, 8), xytext=(0, 5), textcoords="offset points", ha="center", va="bottom",
+                fontsize=SMALL, color=INK)
+    ax.annotate("N₂O", (6.3, 0.3), xytext=(-5, 0), textcoords="offset points", ha="right", va="center",
+                fontsize=SMALL, color=INK)
+    ax.annotate("H₂O", (8.6, 50), xytext=(0, 5), textcoords="offset points", ha="center", va="bottom",
+                fontsize=SMALL, color=INK)
+    for x0, start, end in [(6.3, 0.36, 1.0), (8.6, 44, 20)]:  # distance to the range
+        ax.annotate("", (x0, end), (x0, start), arrowprops=dict(arrowstyle="->", color=RED, lw=1.0,
+                                                                  shrinkA=0, shrinkB=0))
     for side in ("top", "right"):
         ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_linewidth(0.7)
+        ax.spines[side].set_color(INK2)
     ax.set_xticks([])
-    ax.set_yticks([0.1, 1, 20, 100])
-    ax.set_yticklabels(["0,1 %", "1 %", "20 %", "100 %"], fontsize=SMALL)
-    ax.minorticks_off()
-    ax.set_xlabel("nombre d'onde →", fontsize=SMALL, labelpad=3)
-    ax.set_ylabel("absorption au pic", fontsize=SMALL, labelpad=3)
+    _log_ticks(ax, "y", [0.1, 1, 20, 100], ["0.1 %", "1 %", "20 %", "100 %"])
+    ax.set_xlabel("wavenumber →", fontsize=SMALL, labelpad=2, color=INK2)
+    ax.set_ylabel("absorption at the peak", fontsize=SMALL, labelpad=2, color=INK2)
+
+
+def sketch_interference(ax):
+    _title(ax, "E · Interference at a peak")
+    x = np.linspace(0, 10, 1000)
+    ax.plot(x, gauss(x, 3.6, 1.0, 1.3), color=GAS["CH4"], lw=1.5, label="measured gas")
+    ax.plot(x, lorentz(x, 6.6, 0.5, 1.5), color=OTHER, lw=1.2, ls="--", label="other species")
+    other = float(lorentz(3.6, 6.6, 0.5, 1.5))
+    ax.vlines(3.6, 0, 1.0, color=MUTED, ls=":", lw=0.8)
+    ax.plot(3.6, 1.0, "o", ms=6, mfc="none", mec=INK, mew=1.1)
+    ax.plot(3.6, other, "o", ms=3.5, color=INK2)
+    _arrow(ax, (5.0, 0.55), (3.7, other + 0.02))
+    ax.text(5.0, 0.8, f"at the peak: other /\nmeasured = {100 * other:.0f} %\n(limit 5 %)", fontsize=SMALL,
+            color=INK, va="center")
+    ax.legend(loc="upper left", fontsize=SMALL, frameon=False, handlelength=1.5, borderaxespad=0.0,
+              labelcolor=INK)
+    ax.set_xlim(0, 10)
+    ax.set_ylim(0, 1.45)
+    _frame(ax)
 
 
 def sketch_saturation(ax):
-    ax.set_title("F · saturation : trop de lumière absorbée", **TITLE)
+    _title(ax, "F · Saturation")
     x = np.linspace(0, 10, 1000)
     tau = (gauss(x, 2.4, 0.12, 0.45) + gauss(x, 4.9, 0.09, 0.45) + gauss(x, 6.6, 0.15, 0.45)
            + lorentz(x, 10.5, 3.5, 0.8))
     tr = np.exp(-tau)
-    ax.plot(x, tr, color="k", lw=1.7)
-    ax.axhline(0.5, color=RED, ls="--", lw=1.1)
-    ax.text(0.15, 0.53, "seuil (optionnel)", color=RED, fontsize=SMALL, va="bottom")
-    ax.fill_between(x, tr, 0.5, where=tr < 0.5, color=RED, alpha=0.35, lw=0)
-    ax.text(4.6, 0.72, "pics des gaz mesurés", ha="center", fontsize=SMALL, color="0.3")
-    ax.annotate("raie HDO saturée au bord\n→ signalée (filtre optionnel)", xy=(9.85, 0.35), xytext=(3.9, 0.2),
-                fontsize=SMALL, color=RED, fontweight="bold", va="center",
-                arrowprops=dict(arrowstyle="->", color=RED, lw=1.1))
+    ax.plot(x, tr, color=INK, lw=1.3)
+    ax.axhline(0.5, color=MUTED, ls="--", lw=0.8)
+    ax.text(0.15, 0.53, "optional threshold", color=INK2, fontsize=SMALL - 0.4, va="bottom")
+    ax.text(4.6, 0.72, "peaks of the gases", ha="center", fontsize=SMALL - 0.4, color=INK2)
+    k = int(np.argmin(tr))
+    ax.plot(x[k], tr[k], "o", ms=4, color=INK, clip_on=False)
+    _arrow(ax, (6.1, 0.25), (x[k] - 0.15, tr[k] + 0.01))
+    ax.text(2.0, 0.25, "lowest transmission:\nreported", fontsize=SMALL, color=INK, va="center")
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 1.12)
-    _frame(ax, xlabel="balayage du laser →", ylabel="transmission I/I0")
-    ax.set_yticks([0, 0.5, 1])
-    ax.set_yticklabels(["0", "0,5", "1"], fontsize=SMALL)
-
-
-def sketch_interference(ax):
-    ax.set_title("E · interférence : un autre gaz sous le pic", **TITLE)
-    x = np.linspace(0, 10, 1000)
-    ax.plot(x, gauss(x, 4.3, 1.0, 1.3), color=GAS["CH4"], lw=2.2, label="gaz mesuré")
-    ax.plot(x, lorentz(x, 7.0, 0.5, 1.5), color=GREY, lw=1.6, ls="--", label="autre gaz")
-    other = float(lorentz(4.3, 7.0, 0.5, 1.5))
-    ax.vlines(4.3, 0, 1.0, color="0.6", ls=":", lw=1)
-    ax.plot(4.3, 1.0, "o", ms=10, mfc="none", mec=GAS["CH4"], mew=2)
-    ax.plot(4.3, other, "o", ms=6, color=GREY)
-    ax.annotate(f"au pic, l'autre gaz absorbe {100 * other:.0f} %\nde ce qu'absorbe le gaz mesuré\n"
-                f"→ interférence = {100 * other:.0f} %\n(> 5 % : fenêtre éliminée)",
-                xy=(4.35, other + 0.02), xytext=(4.85, 1.02), fontsize=SMALL, va="center",
-                arrowprops=dict(arrowstyle="->", color="0.3", lw=1))
-    ax.legend(loc="upper left", fontsize=SMALL, frameon=False, handlelength=1.6, borderaxespad=0.1)
-    ax.set_xlim(0, 10)
-    ax.set_ylim(0, 1.35)
-    _frame(ax)
+    _frame(ax, xlabel="laser scan →", ylabel="total transmission I/I₀")
+    _log_ticks(ax, "y", [0, 0.5, 1], ["0", "0.5", "1"])
 
 
 def sketch_temperature(ax):
-    ax.set_title("G · sensibilité à la température (effet exagéré)", **TITLE)
+    _title(ax, "G · Temperature sensitivity")
     x = np.linspace(0, 10, 1000)
-    ax.plot(x, gauss(x, 4.2, 1.0, 1.6), color=GAS["H2O"], lw=2.2, label="à T")
-    ax.plot(x, gauss(x, 4.2, 0.8, 1.75), color=GAS["H2O"], lw=1.6, ls="--", label="à T + 1 K")
-    ax.annotate("", (4.2, 0.8), (4.2, 1.0), arrowprops=dict(arrowstyle="<->", lw=1.1))
-    ax.text(4.45, 0.9, "Δα", fontsize=SMALL + 1.5, va="center", fontweight="bold")
-    ax.text(6.3, 0.55, "coefficient =\nΔα / α par degré\n(en %/K, à pression\nconstante)",
-            fontsize=SMALL, va="center")
-    ax.legend(loc="upper right", fontsize=SMALL, frameon=False, handlelength=1.6, borderaxespad=0.1)
+    ax.plot(x, gauss(x, 3.6, 1.0, 1.6), color=GAS["H2O"], lw=1.5, label="at T")
+    ax.plot(x, gauss(x, 3.6, 0.8, 1.75), color=GAS["H2O"], lw=1.1, ls="--", label="at T + 1 K")
+    ax.annotate("", (3.6, 0.8), (3.6, 1.0), arrowprops=dict(arrowstyle="<->", lw=0.8, color=INK,
+                                                          shrinkA=0, shrinkB=0))
+    ax.text(3.85, 0.9, "Δα", fontsize=SMALL + 0.6, va="center", color=INK)
+    ax.text(5.9, 0.5, "coefficient\n= Δα / α per K\n(constant P;\nexaggerated)", fontsize=SMALL, va="center",
+            color=INK)
+    ax.legend(loc="upper right", fontsize=SMALL, frameon=False, handlelength=1.5, borderaxespad=0.0,
+              labelcolor=INK)
     ax.set_xlim(0, 10)
     ax.set_ylim(0, 1.3)
     _frame(ax)
 
 
-# ------------------------------------------------------------- blocks -------
+def sketch_extra_peaks(ax):
+    """Same axes as D: the selected peak and another top of the same gas, both in the range."""
+    _title(ax, "H · Other peaks in the range")
+    x = np.linspace(0, 10, 1500)
+    floor = 0.03
+    tops = [(3.0, 9.0), (5.8, 2.5), (8.6, 0.3)]
+    curve = floor + sum(gauss(x, x0, top, 0.45) for x0, top in tops)
+    ax.set_yscale("log")
+    ax.set_xlim(0, 10)
+    ax.set_ylim(floor * 0.8, 200)
+    ax.axhspan(1, 20, color=BAND, lw=0)
+    ax.text(0.2, 4.5, "range", fontsize=SMALL, color=INK, va="center", fontweight="bold")
+    ax.plot(x, curve, color=GAS["CH4"], lw=1.5)
+    (x1, t1), (x2, t2), (x3, t3) = tops
+    ax.plot(x1, t1 + floor, "o", ms=6, mfc="none", mec=INK, mew=1.2)
+    ax.plot(x2, t2 + floor, "o", ms=6, mfc="none", mec=INK2, mew=1.0)
+    ax.annotate("selected", (x1, t1), xytext=(0, 6), textcoords="offset points", ha="center", va="bottom",
+                fontsize=SMALL, color=INK)
+    _status(ax, (x2 + 0.45, t2), True, "also in range:\nlisted")
+    ax.annotate("too weak", (x3, t3), xytext=(0, 5), textcoords="offset points", ha="center", va="bottom",
+                fontsize=SMALL - 0.4, color=INK2)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_linewidth(0.7)
+        ax.spines[side].set_color(INK2)
+    ax.set_xticks([])
+    _log_ticks(ax, "y", [0.1, 1, 20, 100], ["0.1 %", "1 %", "20 %", "100 %"])
+    ax.set_xlabel("wavenumber →", fontsize=SMALL, labelpad=2, color=INK2)
+    ax.set_ylabel("absorption", fontsize=SMALL, labelpad=2, color=INK2)
 
-# (title, subtitle, header color, [(line, tag or None, indent)], [sketches], where the sketches go)
+
+def sketch_background_limit(ax):
+    """Interference at a peak vs. one background gas's concentration: everything else (rest)
+    plus this gas, proportional to its concentration -- the limit is where it reaches 5 %."""
+    _title(ax, "I · Background-gas limit")
+    rest, own = 0.2, 0.3  # % of interference: the other species; this gas at its standard level
+    f = np.logspace(-1, 2.3, 300)  # concentration / standard
+    limit = (5 - rest) / own
+    ax.loglog(f, rest + own * f, color=INK, lw=1.3)
+    ax.axhline(5, color=RED, ls="--", lw=0.9)
+    ax.text(0.12, 6.2, "limit (5 %)", fontsize=SMALL - 0.4, color=INK2, va="bottom")
+    ax.plot(1, rest + own, "o", ms=4, color=INK)
+    ax.annotate("standard", (1, rest + own), xytext=(4, -3), textcoords="offset points",
+                ha="left", va="top", fontsize=SMALL, color=INK)
+    ax.plot(limit, 5, "o", ms=5, mfc="white", mec=RED, mew=1.2)
+    ax.vlines(limit, 0.08, 5, color=MUTED, ls=":", lw=0.8)
+    ax.annotate(f"{limit:.0f} ×\nstandard", (limit, 5), xytext=(4, -5), textcoords="offset points",
+                ha="left", va="top", fontsize=SMALL, color=INK)
+    ax.set_xlim(0.1, 200)
+    ax.set_ylim(0.08, 20)
+    for side in ("top", "right"):
+        ax.spines[side].set_visible(False)
+    for side in ("left", "bottom"):
+        ax.spines[side].set_linewidth(0.7)
+        ax.spines[side].set_color(INK2)
+    _log_ticks(ax, "x", [0.1, 1, 10, 100], ["0.1", "1", "10", "100"])
+    _log_ticks(ax, "y", [0.1, 1, 10], ["0.1 %", "1 %", "10 %"])
+    ax.set_xlabel("background gas (× standard)", fontsize=SMALL, labelpad=2, color=INK2)
+    ax.set_ylabel("interference at the peak", fontsize=SMALL, labelpad=2, color=INK2)
+
+
+SKETCHES = [sketch_line_in_window, sketch_separation, sketch_peak, sketch_ranking, sketch_interference,
+            sketch_saturation, sketch_temperature, sketch_extra_peaks, sketch_background_limit]
+
+
+# ------------------------------------------------------------- procedure ----
+
+# (title, subtitle, header colour, [(line, tag or None, indent)]); letters A-I = SKETCHES
 BLOCKS = [
-    ("DONNÉES DE DÉPART", "", "#5a5a5a", [
-        ("Gaz à mesurer et leurs concentrations (ex. CH4 10 ppm, N2O 1 ppm, H2O 30 %)", None, 0),
-        ("Instrument : longueur effective 7,5 km, 30 mbar, 40 °C, balayage du laser 0,55 cm⁻¹", None, 0),
-        ("Autres gaz présents : concentrations atmosphériques standard (42 molécules)", None, 0),
-        ("Paramètres de toutes les raies : base de données HITRAN", None, 0),
-    ], [], None),
-    ("ÉTAPE 1", "présélection rapide à partir de la liste des raies (2000–9000 cm⁻¹)", "#2e7d4f", [
-        ("1. Pour chaque gaz, on garde les raies assez intenses", None, 0),
-        ("(intensité × concentration)", None, 1),
-        ("2. Chaque raie intense définit une fenêtre candidate", None, 0),
-        ("de 0,55 cm⁻¹ autour d'elle", None, 1),
-        ("3. Chaque gaz a-t-il une raie intense dans la fenêtre ?  → A", "filtre", 0),
-        ("4. Raies des gaz séparées d'au moins 3 × leur largeur ?  → B", "filtre", 0),
-        ("5. On garde les 200 fenêtres les plus prometteuses", None, 0),
-    ], [sketch_line_in_window, sketch_separation], "right"),
-    ("ÉTAPE 2", "calcul du vrai spectre d'absorption (profil de Voigt : Doppler + pression)", "#2e7d4f", [
-        ("6. Spectre de chaque gaz sur la fenêtre,", None, 0),
-        ("ailes des raies voisines comprises", None, 1),
-        ("7. Pic retenu = un sommet du spectre de chaque gaz  → C", None, 0),
-        ("celui dont l'absorption convient le mieux (plage visée) ;", None, 1),
-        ("l'aile d'une raie hors de la fenêtre n'est jamais prise", None, 1),
-        ("8. Séparation revérifiée avec les vraies largeurs", "filtre", 0),
-        ("9. Transmission de chaque gaz à son pic : I/I0 = exp(−α · L)", None, 0),
-    ], [sketch_peak], "right"),
-    ("CLASSEMENT", "", "#1f5fbf", [
-        ("① Nombre de gaz qui absorbent entre 1 et 20 %  → D", "classement", 0),
-        ("(1 % = limite de détection : SNR requis / SNR du spectre)", None, 1),
-        ("② À égalité : plus petit écart total à cette plage", "classement", 0),
-        ("(10× trop faible compte autant que 10× trop fort)", None, 1),
-    ], [sketch_ranking], "right"),
-    ("VÉRIFICATION ET ANALYSE", "pour les meilleures fenêtres, jusqu'à en avoir 10", "#7a4fa3", [
-        ("10. Spectres des autres gaz : gaz atmosphériques, isotopes des gaz mesurés, autres gaz mesurés",
+    ("INPUTS", "example: the SubOcean case, the web app's defaults", "#5a5a5a", [
+        ("Gases to measure and their concentrations: CH₄ 10 ppm, N₂O 1 ppm, H₂O 30 %", None, 0),
+        ("an isotopologue is a gas of its own, e.g. ¹³CH₄ or ¹⁴N¹⁵N¹⁶O", None, 1),
+        ("Instrument: effective path length L = 7.5 km, P = 30 mbar, T = 40 °C, laser scan Δσ = 0.55 cm⁻¹",
          None, 0),
-        ("11. Interférence au pic de chaque gaz mesuré ≤ 5 % (seuil réglable) ?  → E", "filtre", 0),
-        ("12. Transmission totale minimale sur le balayage (saturation)  → F", "affiche", 0),
-        ("13. Sensibilité à la température du pic (en %/K) et du rapport isotopique  → G", "affiche", 0),
-    ], [sketch_interference, sketch_saturation, sketch_temperature], "below"),
-    ("RÉSULTAT", "", "#5a5a5a", [
-        ("Les 10 meilleures fenêtres, avec pour chaque gaz : position du pic, absorption, "
-         "interférence (score) et sensibilité à la température", None, 0),
-        ("Un graphique du spectre par fenêtre, avec le pic retenu de chaque gaz entouré", None, 0),
-    ], [], None),
+        ("Search range (cm⁻¹ or µm), absorption range 1–20 %, maximum interference 5 %", None, 0),
+        ("Background gases: standard atmosphere (42 molecules, editable). Line parameters: HITRAN", None, 0),
+    ]),
+    ("STAGE 1", "fast pre-selection on the line list, no line shape", "#2e7d4f", [
+        ("1.  Keep each gas's strong lines: intensity S(T) × its number density ≥ threshold", None, 0),
+        ("2.  Each strong line is the centre of a candidate window of width Δσ", None, 0),
+        ("3.  Does every gas have a strong line in the window?  → A", "filter", 0),
+        ("4.  For each gas, take the line whose estimated absorption best fits the range", None, 0),
+        ("5.  Is every pair of gases at least 3 line widths (FWHM) apart?  → B", "filter", 0),
+        ("6.  Rank on that estimate, drop overlapping windows, keep the best 200", None, 0),
+    ]),
+    ("STAGE 2", "exact spectrum on each candidate window (Voigt profile: Doppler + pressure)", "#2e7d4f", [
+        ("7.  Spectrum of each gas over the window, wings of the neighbouring lines included", None, 0),
+        ("8.  Each gas's peak: a top of its curve, the one that best fits the absorption range  → C", None, 0),
+        ("a maximum at the window's edge is the wing of a line outside it: never selected", None, 1),
+        ("9.  Separation checked again, with the widths measured on the curves", "filter", 0),
+        ("10. Absorption at each peak: A = 1 − exp(−α L)", None, 0),
+    ]),
+    ("RANKING", "", "#1f5fbf", [
+        ("①  Number of gases whose peak absorption is in the range 1–20 %  → D", "rank", 0),
+        ("1 % = detection limit: required SNR / SNR of the spectrum = 10 / 1000", None, 1),
+        ("②  For equal numbers: smallest total distance to the range, in decades", "rank", 0),
+        ("10 × too weak counts as much as 10 × too strong", None, 1),
+    ]),
+    ("CHECKS AND DIAGNOSTICS", "down the ranked list, until 10 windows pass", "#7a4fa3", [
+        ("11. Spectra of all other species: background gases, other isotopologues, the other gases", None, 0),
+        ("12. Interference at each gas's peak ≤ 5 %?  → E", "filter", 0),
+        ("13. Lowest total transmission across the scan (saturation)  → F", "reported", 0),
+        ("14. Temperature sensitivity of each peak (%/K) and of isotope ratios  → G", "reported", 0),
+        ("15. Other peaks of the measured gases that also fit the range  → H", "reported", 0),
+        ("16. Highest concentration of each background gas before check 12 fails  → I", "reported", 0),
+    ]),
+    ("OUTPUT", "", "#5a5a5a", [
+        ("The 10 best windows. For each gas: peak position, absorption, interference and main", None, 0),
+        ("interferer, temperature sensitivity; a plot of each window. Saved as a file to reopen, or CSV", None, 0),
+    ]),
 ]
 
-# ------------------------------------------------------------- layout -------
-
-W = 16.0  # figure width, inches
-X0, X1 = 0.35, W - 0.35  # block left/right edges
-TEXT_X = X0 + 0.25
-TAG_W, TAG_X = 1.15, 7.45  # tag column (right end of the text column)
-SKETCH_RIGHT_X0 = 9.0  # sketches placed to the right of the text start here
-LINE_H, HEAD_H, PAD, GAP = 0.30, 0.42, 0.16, 0.42
-SKETCH_H = 2.45  # one row of sketches: title + axes + axis labels
-SKETCH_GAP = 0.55  # between two sketches of a row
-TOP, BOTTOM = 1.0, 1.55  # page title / legend
+W = 6.3  # inches: the text width of an A4 page with 2.5 cm margins
+X0, X1 = 0.02, W - 0.02  # block edges
+TEXT_X = X0 + 0.12
+TAG_W, TAG_H = 0.66, 0.118
+TAG_X = X1 - 0.1 - TAG_W
+LINE_H, HEAD_H, PAD, GAP = 0.158, 0.235, 0.07, 0.2
+FONT, SUB_FONT, HEAD_FONT, TAG_FONT = 7.6, 7.0, 8.2, 6.0
+LEGEND_H = 0.3
 
 
-def _text_h(lines):
-    return PAD * 2 + LINE_H * len(lines)
+def _tag(ax, x, y, tag, width=TAG_W):
+    label, colour = TAGS[tag]
+    ax.add_patch(FancyBboxPatch((x, y - TAG_H / 2), width, TAG_H, boxstyle="round,pad=0,rounding_size=0.03",
+                                fc=colour, ec="none"))
+    ax.text(x + width / 2, y, label, color="white", fontsize=TAG_FONT, fontweight="bold", ha="center",
+            va="center_baseline")
 
 
-def _height(lines, sketches, where):
-    if not sketches:
-        return HEAD_H + _text_h(lines)
-    if where == "right":
-        return HEAD_H + max(_text_h(lines), SKETCH_H + 2 * PAD)
-    return HEAD_H + _text_h(lines) + SKETCH_H + PAD
+def _block_height(lines):
+    return HEAD_H + 2 * PAD + LINE_H * len(lines)
 
 
-def main():
-    """Draw the full page (docs/workflow.png + .pdf). The sketch_* functions above can
-    also be imported on their own (docs/slides/make_figures.py does)."""
-    heights = [_height(lines, sk, where) for *_, lines, sk, where in BLOCKS]
-    H = TOP + sum(heights) + GAP * (len(BLOCKS) - 1) + BOTTOM
-
+def draw_workflow():
+    heights = [_block_height(lines) for *_, lines in BLOCKS]
+    H = 0.02 + sum(heights) + GAP * (len(BLOCKS) - 1) + LEGEND_H
     fig = plt.figure(figsize=(W, H))
     ax = fig.add_axes([0, 0, 1, 1])
     ax.set_xlim(0, W)
     ax.set_ylim(0, H)
     ax.axis("off")
 
-
-    def _sketch_row(sketches, x0, x1, top):
-        """One row of sketches in [x0, x1] (inches), hanging from y=top."""
-        n = len(sketches)
-        width = (x1 - x0 - SKETCH_GAP * (n - 1)) / n
-        for i, draw in enumerate(sketches):
-            left = x0 + i * (width + SKETCH_GAP) + 0.3  # room for the y label
-            bottom = top - SKETCH_H + 0.45  # room for the x label
-            sub = fig.add_axes([left / W, bottom / H, (width - 0.3) / W, (SKETCH_H - 0.45 - 0.38) / H])
-            draw(sub)
-
-
-    def _width_in(text, size, bold=False):
-        path = TextPath((0, 0), text, size=size, prop=FontProperties(weight="bold" if bold else "normal"))
-        return path.get_extents().width / 72
-
-
-    ax.text(W / 2, H - TOP / 2, "Sélection des fenêtres spectrales — principe de la méthode",
-            ha="center", va="center", fontsize=17, fontweight="bold")
-
-    y = H - TOP
-    for (title, subtitle, color, lines, sketches, where), h in zip(BLOCKS, heights):
-        top = y
-        ax.add_patch(FancyBboxPatch((X0, top - h), X1 - X0, h, boxstyle="round,pad=0,rounding_size=0.08",
-                                    fc="white", ec=color, lw=1.8))
+    top = H - 0.02
+    for i, ((title, subtitle, colour, lines), h) in enumerate(zip(BLOCKS, heights)):
+        ax.add_patch(FancyBboxPatch((X0, top - h), X1 - X0, h, boxstyle="round,pad=0,rounding_size=0.05",
+                                    fc="white", ec=colour, lw=0.9))
         ax.add_patch(FancyBboxPatch((X0, top - HEAD_H), X1 - X0, HEAD_H,
-                                    boxstyle="round,pad=0,rounding_size=0.08", fc=color, ec=color, lw=1.8))
-        ax.text(X0 + 0.18, top - HEAD_H / 2, title, color="white", fontsize=12, fontweight="bold", va="center")
+                                    boxstyle="round,pad=0,rounding_size=0.05", fc=colour, ec=colour, lw=0.9))
+        ax.text(X0 + 0.1, top - HEAD_H / 2, title, color="white", fontsize=HEAD_FONT, fontweight="bold",
+                va="center_baseline")
         if subtitle:
-            ax.text(X0 + 0.18 + _width_in(title, 12, bold=True) + 0.3, top - HEAD_H / 2, "·  " + subtitle,
-                    color="white", fontsize=10, va="center")
+            ax.text(X0 + 0.1 + _width_pt(title, HEAD_FONT, bold=True) / 72 + 0.12, top - HEAD_H / 2,
+                    "·  " + subtitle, color="white", fontsize=FONT - 0.3, va="center_baseline")
 
-        ly = top - HEAD_H - PAD - LINE_H / 2
+        y = top - HEAD_H - PAD - LINE_H / 2
         for text, tag, indent in lines:
-            ax.text(TEXT_X + 0.3 * indent, ly, text, fontsize=10, va="center",
-                    color="#222222" if indent == 0 else "#555555")
+            ax.text(TEXT_X + 0.24 * indent, y, text, fontsize=SUB_FONT if indent else FONT,
+                    color=INK2 if indent else INK, va="center_baseline")
             if tag:
-                label, tcolor = TAGS[tag]
-                ax.add_patch(FancyBboxPatch((TAG_X, ly - 0.105), TAG_W, 0.21,
-                                            boxstyle="round,pad=0,rounding_size=0.05", fc=tcolor, ec="none"))
-                ax.text(TAG_X + TAG_W / 2, ly, label, color="white", fontsize=8, fontweight="bold",
-                        ha="center", va="center")
-            ly -= LINE_H
+                _tag(ax, TAG_X, y, tag)
+            y -= LINE_H
 
-        if where == "right":
-            ax.plot([SKETCH_RIGHT_X0 - 0.3] * 2, [top - HEAD_H - 0.15, top - h + 0.15], color="0.85", lw=1)
-            _sketch_row(sketches, SKETCH_RIGHT_X0, X1 - 0.2, top - HEAD_H - PAD)
-        elif where == "below":
-            _sketch_row(sketches, TEXT_X - 0.1, X1 - 0.2, top - HEAD_H - _text_h(lines))
+        if i < len(BLOCKS) - 1:
+            ax.add_patch(FancyArrowPatch((W / 2, top - h - 0.02), (W / 2, top - h - GAP + 0.02),
+                                         arrowstyle="-|>", mutation_scale=9, color=MUTED, lw=1.0))
+        top -= h + GAP
 
-        y = top - h - GAP
-        if title != BLOCKS[-1][0]:
-            ax.add_patch(FancyArrowPatch((W / 2, top - h - 0.04), (W / 2, y + 0.04),
-                                         arrowstyle="-|>", mutation_scale=18, color="#555555", lw=1.6))
+    # legend: what each tag means
+    x, y = X0 + 0.02, LEGEND_H / 2 - 0.02
+    for tag, meaning in [("filter", "the window is dropped if it fails"), ("rank", "decides the order"),
+                         ("reported", "shown, does not select")]:
+        _tag(ax, x, y, tag, width=0.62)
+        ax.text(x + 0.62 + 0.07, y, meaning, fontsize=SUB_FONT, color=INK2, va="center_baseline")
+        x += 0.62 + 0.07 + _width_pt(meaning, SUB_FONT) / 72 + 0.3
+    return fig
 
-    # legend, one item per row, + a note on the sketches
-    ly = BOTTOM - 0.45
-    for tag, desc in [("filtre", "la fenêtre est éliminée si la condition n'est pas remplie"),
-                      ("classement", "décide de l'ordre des fenêtres"),
-                      ("affiche", "reporté seulement, n'influence pas le choix")]:
-        label, tcolor = TAGS[tag]
-        ax.add_patch(FancyBboxPatch((X0 + 0.1, ly - 0.1), 1.05, 0.2, boxstyle="round,pad=0,rounding_size=0.05",
-                                    fc=tcolor, ec="none"))
-        ax.text(X0 + 0.625, ly, label, color="white", fontsize=7.5, fontweight="bold", ha="center", va="center")
-        ax.text(X0 + 1.3, ly, desc, fontsize=9, va="center", color="#333333")
-        ly -= 0.27
-    ax.text(X1, BOTTOM - 0.45, "Schémas A–G : illustrations du raisonnement, pas à l'échelle.",
-            ha="right", va="center", fontsize=9, color="#555555", style="italic")
 
-    fig.savefig(OUT / "workflow.png", dpi=170)
-    fig.savefig(OUT / "workflow.pdf")
-    print(f"saved {OUT / 'workflow.png'} and {OUT / 'workflow.pdf'}")
+def draw_criteria():
+    fig, axes = plt.subplots(3, 3, figsize=(W, 5.5), layout="constrained")
+    # rect: a small right margin, which the left-aligned titles of the last column don't get otherwise
+    fig.get_layout_engine().set(w_pad=0.03, h_pad=0.05, wspace=0.05, hspace=0.07, rect=(0, 0, 0.985, 1))
+    for ax, draw in zip(axes.flat, SKETCHES):
+        draw(ax)
+    return fig
+
+
+def main():
+    for name, draw in [("workflow", draw_workflow), ("workflow_criteria", draw_criteria)]:
+        fig = draw()
+        fig.savefig(OUT / f"{name}.pdf")
+        fig.savefig(OUT / f"{name}.png", dpi=300)
+        plt.close(fig)
+        print(f"saved {OUT / name}.pdf and .png")
 
 
 if __name__ == "__main__":
