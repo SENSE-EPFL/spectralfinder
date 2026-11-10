@@ -87,6 +87,7 @@ h1 {
 
 .head-tools {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 0.4rem;
 }
@@ -399,7 +400,23 @@ button.tool {
     cursor: pointer;
 }
 
-button.tool:hover {
+/* a link that looks like the buttons next to it (Documentation in the header) */
+a.tool {
+    display: inline-flex;
+    align-items: center;
+    box-sizing: border-box;
+    min-height: 2.1rem;
+    padding: 0.3rem 0.75rem;
+    border: 1px solid var(--sf-border);
+    border-radius: 8px;
+    background: var(--sf-surface);
+    color: var(--sf-text);
+    font-size: 0.9rem;
+    text-decoration: none;
+}
+
+button.tool:hover,
+a.tool:hover {
     background: var(--sf-surface-2);
 }
 

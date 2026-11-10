@@ -323,8 +323,14 @@ def data_note() -> str:
             "so results can change with the data version.")
 
 
+# the repository's README: how to use the app, the method, how to cite SpectralFinder
+README_URL = "https://github.com/SENSE-EPFL/spectralfinder#readme"
+
+
 def footer() -> html.Footer:
     return html.Footer([
+        html.P(["How to use SpectralFinder, the method and how to cite it: ",
+                html.A("README on GitHub", href=README_URL, target="_blank", rel="noopener")]),
         html.P(data_note()),
         html.P("Uses HITRAN data through HAPI. Please cite:"),
         html.Ul([html.Li([text, " ", html.A(url, href=url, target="_blank")]) for text, url in CITATIONS]),
@@ -345,6 +351,8 @@ app.layout = html.Div([
             # text size, remembered in the browser (assets/text_size.js)
             html.Button("A−", title="Smaller text", className="tool", **{"data-text-size": "-1"}),
             html.Button("A+", title="Larger text", className="tool", **{"data-text-size": "+1"}),
+            html.A("Documentation", href=README_URL, target="_blank", rel="noopener", className="tool",
+                   title="How to use SpectralFinder: the README on GitHub (new tab)"),
             dcc.Checklist([" Dark mode"], [], id="dark", className="theme-switch"),
         ], className="head-tools"),
     ], className="page-head"),
